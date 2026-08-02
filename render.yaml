@@ -1,0 +1,23 @@
+# Render blueprint for the site at prombot.net. The backend is not here: it
+# stays on server.jio.is, and the browser calls it cross-origin (VITE_API), so
+# that host's ALLOWED_ORIGINS must list https://prombot.net.
+services:
+  - type: web
+    name: prombot
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API
+        value: https://server.jio.is
+      # The ~1.1 GB index is not in the repo and cannot be published from here.
+      # Set this in the Render dashboard to the host serving it; that host needs
+      # CORS for https://prombot.net and Range support.
+      - key: VITE_DATA
+        sync: false
+    routes:
+      # Single page: anything that is not a built asset is the app itself.
+      - type: rewrite
+        source: /*
+        destination: /index.html

@@ -9,7 +9,7 @@ export default defineConfig({
     server: {
         port: 8092,
         host: true,
-        allowedHosts: ["localhost", "shoujo.jio.is"],
+        allowedHosts: ["localhost", "prombot.net", "shoujo.jio.is"],
         // Same-origin /api keeps CORS out of it entirely — which also means this
         // works unchanged from a phone on the LAN and from shoujo.jio.is, neither
         // of which an origin allowlist would have covered.

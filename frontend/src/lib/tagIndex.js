@@ -3,7 +3,8 @@
    191k JS strings per keystroke, and because the blob is built in
    count-descending order, matches come out already ranked by usage. */
 
-const URL = "/tags.csv.gz";
+// Same store as the prompt index; see promptIndex.js for what VITE_DATA is for.
+const URL = `${import.meta.env?.VITE_DATA ?? ""}/tags.csv.gz`;
 
 export const CATEGORIES = {
     0: { name: "general", color: "#8fb8ff" },

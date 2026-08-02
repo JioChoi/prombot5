@@ -23,8 +23,10 @@ NAI = "https://image.novelai.net"
 # The frontend calls this backend cross-origin in both dev and prod (frontend/.env
 # points it here), so this list is load-bearing, not a fallback. A dev box reached by
 # LAN IP or any other host needs its origin added via ALLOWED_ORIGINS.
-ORIGINS = [o.strip() for o in
-           os.environ.get("ALLOWED_ORIGINS", "http://localhost:8092,https://shoujo.jio.is").split(",")]
+ORIGINS = [o.strip() for o in os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8092,https://prombot.net,https://www.prombot.net,https://shoujo.jio.is",
+).split(",")]
 
 app = FastAPI()
 app.add_middleware(

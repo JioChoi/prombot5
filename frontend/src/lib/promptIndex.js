@@ -6,18 +6,25 @@
    records are all blocked so a query pays for the blocks it touches. Files come
    from build_index.py and build_dict.py. */
 
-const LOOKUP_URL = "/tag-lookup.bin";
-const LOOKUP_IDX_URL = "/tag-lookup.json.gz";
-const NAMES_URL = "/tag-names.bin";
-const NAMES_IDX_URL = "/tag-names.idx";
-const META_URL = "/prompts.json";
+/* Where the index lives. Empty means same-origin, which is how dev runs. The
+   built site is ~1.1 GB short of being able to carry these itself, so in
+   production they are served from wherever VITE_DATA points — that host has to
+   allow this origin by CORS and honour Range, since every read here is a range
+   request. */
+const DATA = import.meta.env?.VITE_DATA ?? "";
+
+const LOOKUP_URL = `${DATA}/tag-lookup.bin`;
+const LOOKUP_IDX_URL = `${DATA}/tag-lookup.json.gz`;
+const NAMES_URL = `${DATA}/tag-names.bin`;
+const NAMES_IDX_URL = `${DATA}/tag-names.idx`;
+const META_URL = `${DATA}/prompts.json`;
 // tags per block in both dictionary files; must match build_dict.BLOCK
 const BLOCK = 256;
-const POSTINGS_URL = "/postings.bin";
-const PROMPTS_URL = "/prompts.bin";
-const OFFSETS_URL = "/prompts.idx";
-const GROUPS_URL = "/tag-groups.csv.gz";
-const PROFILES_URL = "/characters.csv.gz";
+const POSTINGS_URL = `${DATA}/postings.bin`;
+const PROMPTS_URL = `${DATA}/prompts.bin`;
+const OFFSETS_URL = `${DATA}/prompts.idx`;
+const GROUPS_URL = `${DATA}/tag-groups.csv.gz`;
+const PROFILES_URL = `${DATA}/characters.csv.gz`;
 // danbooru category ids; the client only cares which tags are artists
 export const ARTIST = 1;
 
