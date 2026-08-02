@@ -378,18 +378,19 @@ export default function SettingsSheet() {
                                                         <Eye strokeWidth={2} className="h-3.5 w-3.5" />
                                                     )}
                                                 </IconButton>
-                                                {characters.length > 1 ? (
-                                                    <IconButton
-                                                        label={`Remove character ${i + 1}`}
-                                                        onClick={() =>
-                                                            setCharacters((cs) =>
-                                                                cs.filter((x) => x.id !== c.id),
-                                                            )
-                                                        }
-                                                    >
-                                                        <X strokeWidth={2} className="h-3.5 w-3.5" />
-                                                    </IconButton>
-                                                ) : null}
+                                                {/* Removable down to none: zero
+                                                    characters is a valid image, not
+                                                    a state to be trapped out of. */}
+                                                <IconButton
+                                                    label={`Remove character ${i + 1}`}
+                                                    onClick={() =>
+                                                        setCharacters((cs) =>
+                                                            cs.filter((x) => x.id !== c.id),
+                                                        )
+                                                    }
+                                                >
+                                                    <X strokeWidth={2} className="h-3.5 w-3.5" />
+                                                </IconButton>
                                             </div>
                                         </div>
                                         {/* Kept editable while skipped: this is a

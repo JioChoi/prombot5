@@ -43,9 +43,9 @@ export function SettingsProvider({ children }) {
         beginning: usePersistentState("beginning", BEGINNING),
         ending: usePersistentState("ending", ENDING),
         negative: usePersistentState("negative", NEGATIVE),
-        characters: usePersistentState("characters", [
-            { id: 1, text: "", negative: "", x: 0.5, y: 0.5 },
-        ]),
+        // None to start: a character is something you add, and an image without
+        // one is the normal case.
+        characters: usePersistentState("characters", []),
         // false = let the model decide where everyone stands (NovelAI's use_coords off).
         useCoords: usePersistentState("useCoords", false),
         include: usePersistentState("include", "1girl, outdoors"),
