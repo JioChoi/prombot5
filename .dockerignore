@@ -1,0 +1,15 @@
+# The 1.1 GB index. Vite copies public/ into dist, so leaving this in would put
+# every byte of it into the image — it is served from Hugging Face instead.
+frontend/public/
+data/
+
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+**/__pycache__/
+.git/
+
+# Secrets belong in Render's environment, never in a layer.
+backend/.env
+proxy/.env
+token

@@ -12,7 +12,7 @@ import os
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import relay
 
@@ -20,13 +20,16 @@ import relay
 # "Please refresh NovelAI.net. If using a third-party tool, update to the image URL."
 # on every path — subscription checks included, not just generation.
 NAI = "https://image.novelai.net"
-# The frontend calls this backend cross-origin in both dev and prod (frontend/.env
-# points it here), so this list is load-bearing, not a fallback. A dev box reached by
-# LAN IP or any other host needs its origin added via ALLOWED_ORIGINS.
+# In production this process serves the site too, so the browser calls /api on
+# its own origin and CORS never comes up. The list is here for the split setup:
+# a dev server on another port, or a browser pointed at a different backend.
 ORIGINS = [o.strip() for o in os.environ.get(
     "ALLOWED_ORIGINS",
     "http://localhost:8092,https://prombot.net,https://www.prombot.net,https://shoujo.jio.is",
 ).split(",")]
+
+# Where the built site is. Unset in dev, where Vite serves it instead.
+STATIC = os.environ.get("STATIC_DIR", "")
 
 app = FastAPI()
 app.add_middleware(
@@ -96,3 +99,21 @@ async def generate_image_stream(request: Request):
     """Progress images as they are produced. Needs "stream": "msgpack" in the
     payload — the plain endpoint ignores that flag and answers with a zip."""
     return await forward(request, "/ai/generate-image-stream")
+
+
+# The site, last: every route above is matched first, so /api keeps winning.
+if STATIC:
+    ROOT = os.path.realpath(STATIC)
+    INDEX = os.path.join(ROOT, "index.html")
+
+    @app.get("/{path:path}")
+    async def site(path: str):
+        """A real file if there is one, the app otherwise — a single page has no
+        server-side routes, so a deep link is still just index.html."""
+        # realpath before the check: "../../etc/passwd" is a path the client
+        # controls, and joining it blindly would serve anything on the disk.
+        wanted = os.path.realpath(os.path.join(ROOT, path))
+        inside = wanted == ROOT or wanted.startswith(ROOT + os.sep)
+        if path and inside and os.path.isfile(wanted):
+            return FileResponse(wanted)
+        return FileResponse(INDEX)

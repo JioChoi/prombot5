@@ -1,23 +1,18 @@
-# Render blueprint for the site at prombot.net. The backend is not here: it
-# stays on server.jio.is, and the browser calls it cross-origin (VITE_API), so
-# that host's ALLOWED_ORIGINS must list https://prombot.net.
+# One service for prombot.net: the Dockerfile builds the site and serves it from
+# the same uvicorn process that answers /api, so the browser makes no
+# cross-origin request and there is no preflight before a generation.
+#
+# The ~1.1 GB index is not here and cannot be — it is served from
+# huggingface.co/Jio7/prombot, which frontend/.env points at.
 services:
   - type: web
     name: prombot
-    runtime: static
-    rootDir: frontend
-    buildCommand: npm ci && npm run build
-    staticPublishPath: dist
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
     envVars:
-      - key: VITE_API
-        value: https://server.jio.is
-      # The ~1.1 GB index is not in the repo and cannot be published from here.
-      # Set this in the Render dashboard to the host serving it; that host needs
-      # CORS for https://prombot.net and Range support.
-      - key: VITE_DATA
+      # The relays. Set both in the dashboard; sync:false keeps them out of git.
+      - key: PROXY_URLS
         sync: false
-    routes:
-      # Single page: anything that is not a built asset is the app itself.
-      - type: rewrite
-        source: /*
-        destination: /index.html
+      - key: PROXY_KEY
+        sync: false
