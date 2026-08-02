@@ -1,0 +1,15 @@
+# Secrets — PROXY_KEY/PROXY_URLS and the NovelAI key. Never commit these.
+backend/.env
+proxy/.env
+token
+
+__pycache__/
+node_modules/
+frontend/dist/
+
+# The generated index: ~1.1 GB, and two of these files are far past GitHub's
+# 100 MB per-file limit. They are build artefacts of build_index.py,
+# build_dict.py, build_subset.py and build_characters.py over the danbooru
+# dump, and they get deployed as static assets rather than shipped in the repo.
+data/
+frontend/public/

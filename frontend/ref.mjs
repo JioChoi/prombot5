@@ -1,0 +1,13 @@
+import { chromium } from 'playwright';
+const S='/tmp/claude-1000/-home-jio-projects-prombot/72b0d6ed-f270-4439-8bce-3c9997b1d5b0/scratchpad';
+const b = await chromium.launch();
+const p = await b.newPage({viewport:{width:420,height:880}, deviceScaleFactor:2});
+const srcs=[];
+p.on('response', async r => { const u=r.url(); if(/\.js(\?|$)/.test(u)) srcs.push([u, await r.text().catch(()=>'')]); });
+await p.goto('https://prombot-one.vercel.app', {waitUntil:'networkidle'});
+await p.screenshot({path:S+'/ref-home.png'});
+console.log('textareas:', await p.locator('textarea').count(), 'inputs:', await p.locator('input').count());
+const fs = await import('node:fs');
+fs.writeFileSync(S+'/ref-bundles.txt', srcs.map(([u,t])=>`\n=== ${u} (${t.length}) ===\n${t}`).join(''));
+console.log(srcs.map(([u,t])=>`${u} ${t.length}`).join('\n'));
+await b.close();
