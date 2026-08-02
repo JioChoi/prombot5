@@ -7,28 +7,59 @@ import usePersistentState from "../hooks/usePersistentState.js";
  */
 const SettingsContext = createContext(null);
 
+/* Tag types the generator may use. These are stored inverted — true means the
+   type is switched *off* — so this lists the ones left out: everything except
+   attire and expressions. */
+const FILTERS_OFF = {
+    character: true,
+    artist: true,
+    copyright: true,
+    characteristic: true,
+    nsfw: true,
+};
+
+const EXTRAS = {
+    reorder: true,
+    reformat: true,
+    dropRating: true,
+    autoCopyright: true,
+    strengthenCharacteristic: true,
+    strengthenAttire: false,
+};
+
+const BEGINNING = "1girl, kirisame marisa, [[artist:maccha (mochancc)]]";
+
+const ENDING =
+    "no text, best quality, very aesthetic, absurdres, skindentation, " +
+    "depth of field, volumetric lighting";
+
+const NEGATIVE =
+    "blurry, lowres, error, film grain, scan artifacts, worst quality, " +
+    "bad quality, jpeg artifacts, very displeasing, chromatic aberration, " +
+    "multiple views, logo, too many watermarks, blank page, white blank page";
+
 export function SettingsProvider({ children }) {
     const value = {
-        beginning: usePersistentState("beginning", ""),
-        ending: usePersistentState("ending", ""),
-        negative: usePersistentState("negative", ""),
+        beginning: usePersistentState("beginning", BEGINNING),
+        ending: usePersistentState("ending", ENDING),
+        negative: usePersistentState("negative", NEGATIVE),
         characters: usePersistentState("characters", [
             { id: 1, text: "", negative: "", x: 0.5, y: 0.5 },
         ]),
         // false = let the model decide where everyone stands (NovelAI's use_coords off).
         useCoords: usePersistentState("useCoords", false),
-        include: usePersistentState("include", ""),
-        exclude: usePersistentState("exclude", ""),
+        include: usePersistentState("include", "1girl, outdoors"),
+        exclude: usePersistentState("exclude", "speech bubble"),
         minScore: usePersistentState("minScore", 0),
-        filters: usePersistentState("filters", {}),
-        extras: usePersistentState("extras", { reorder: true, reformat: true }),
+        filters: usePersistentState("filters", FILTERS_OFF),
+        extras: usePersistentState("extras", EXTRAS),
 
         model: usePersistentState("model", "nai-diffusion-4-5-full"),
         size: usePersistentState("size", "832x1216"),
         width: usePersistentState("width", 832),
         height: usePersistentState("height", 1216),
         steps: usePersistentState("steps", 28),
-        guidance: usePersistentState("guidance", 5.5),
+        guidance: usePersistentState("guidance", 5),
         seed: usePersistentState("seed", ""),
         sampler: usePersistentState("sampler", "k_euler_ancestral"),
         // NovelAI payload names: variety+ is skip_cfg_above_sigma, rescale is

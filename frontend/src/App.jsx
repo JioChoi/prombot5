@@ -246,7 +246,11 @@ export default function App() {
 
             {/* Stage. The progress image wins while one is running — that is the
                 whole point of streaming — and the last finished image otherwise. */}
-            <main className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-2 pb-24 pt-3">
+            {/* md:pl clears the sidebar, which is always open at that width. */}
+            <main
+                className="absolute inset-0 flex flex-col items-center justify-center gap-3
+                           px-2 pb-24 pt-3 md:pl-[var(--sidebar)]"
+            >
                 {preview || active ? (
                     <img
                         src={preview ?? active.src}
@@ -276,7 +280,7 @@ export default function App() {
             {/* Console — floats over the sheet (z-40 > z-30), so Generate stays
                 reachable while settings are open. */}
             <div
-                className="fixed inset-x-0 bottom-0 z-40 px-3"
+                className="fixed inset-x-0 bottom-0 z-40 px-3 md:pl-[calc(var(--sidebar)+0.75rem)]"
                 style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
             >
                 {/* Capped and centred once there is width: a console stretched

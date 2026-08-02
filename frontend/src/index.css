@@ -34,6 +34,12 @@
     --font-display: "Space Grotesk Variable", var(--font-sans);
 }
 
+/* Width of the settings sidebar on a wide screen. Named because the panel sets
+   it and the stage and dock have to be pushed clear of it by exactly as much. */
+:root {
+    --sidebar: min(420px, 40vw);
+}
+
 html,
 body,
 #root {
