@@ -279,10 +279,12 @@ export default function App() {
                 className="fixed inset-x-0 bottom-0 z-40 px-3"
                 style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
             >
+                {/* Capped and centred once there is width: a console stretched
+                    across a desktop monitor is all gap and no controls. */}
                 <div
-                    className="overflow-hidden rounded-[22px] border border-hair bg-[#33333a]/60
-                               shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14),0_18px_50px_-16px_rgb(0_0_0/0.65)]
-                               backdrop-blur-2xl"
+                    className="mx-auto max-w-[560px] overflow-hidden rounded-[22px] border border-hair
+                               bg-[#33333a]/60 backdrop-blur-2xl
+                               shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14),0_18px_50px_-16px_rgb(0_0_0/0.65)]"
                 >
                     <div className="flex items-center gap-2 p-2">
                         {/* How many images one press makes: a single image, or a
