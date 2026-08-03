@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Dices, Eye, EyeOff, Loader2, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { freeCell } from "../lib/position.js";
-import { buildQuery, countPrompts } from "../lib/promptIndex.js";
+import { buildQuery, countPrompts, estimatePrompts } from "../lib/promptIndex.js";
 import { useSetting } from "../state/settings.jsx";
 import Dropdown from "./Dropdown.jsx";
 import PositionGrid from "./PositionGrid.jsx";
@@ -168,8 +168,30 @@ export default function SettingsSheet() {
         let live = true;
         setCounting(true);
         const timer = setTimeout(() => {
-            countPrompts(buildQuery({ include, exclude, minScore, filters })).then(
-                (n) => live && setMatches(`${n.toLocaleString()} prompts available`),
+            const query = buildQuery({ include, exclude, minScore, filters });
+            // The estimate costs a couple of small reads and lands almost at
+            // once; the exact count has to pull whole posting lists, which for
+            // two common tags is megabytes. Show the rough number rather than a
+            // spinner, and overwrite it when the real one arrives.
+            //
+            // `exact` guards the order: a cached count resolves immediately, and
+            // the estimate must not land on top of the real answer.
+            let exact = false;
+            estimatePrompts(query).then(
+                (n) =>
+                    live && !exact && n !== null &&
+                    setMatches(`about ${n.toLocaleString()} prompts`),
+                () => {},
+            );
+            // Capped: past a few hundred KB of posting list the exact count is
+            // not worth the wait on a slow connection, and it says null so the
+            // estimate stays up.
+            countPrompts(query, 400_000).then(
+                (n) => {
+                    if (n === null) return;
+                    exact = true;
+                    if (live) setMatches(`${n.toLocaleString()} prompts available`);
+                },
                 () => live && setMatches("Prompt index unavailable"),
             ).finally(() => live && setCounting(false));
         }, 300);

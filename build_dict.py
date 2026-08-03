@@ -7,17 +7,19 @@ of tags, and a prompt names thirty.
 
 So the same rows go out twice, blocked both ways a client reads them:
 
-  tag-lookup.bin   tag,count,off,len,cat — tags sorted by name, 256 per block.
+  tag-lookup.bin   tag,count,off,len,cat,id — tags sorted by name, 256 per block.
                    Looking a tag up is one range request for its block.
   tag-lookup.json.gz  [firstTagOfBlock, byteOffset] per block, plus the file
                    length. ~60 KB, the only part loaded up front.
-  tag-names.bin    names in tag-id order, 256 per block, each line prefixed
+  tag-names.bin    names in tag-id order, 64 per block, each line prefixed
                    with its one-digit danbooru category. Decoding a record
                    needs the names of its ids and nothing else.
   tag-names.idx    uint32 LE block offsets, one per block plus a terminator.
 
 Ids are assigned count-descending, so a typical post's tags cluster in the
-first few name blocks and the cache fills up fast.
+first few name blocks and the cache fills up fast. Name blocks are the smaller
+of the two: a prompt names thirty scattered tags and pays a block for each, so
+that block is sized for one tag, not for a scan.
 
 Runs off the built csv — no dump, no duckdb:
 
@@ -31,7 +33,8 @@ import json
 import os
 import struct
 
-BLOCK = 256
+BLOCK = 256       # tags per tag-lookup.bin block
+NAME_BLOCK = 64   # tags per tag-names.bin block
 
 
 def read_rows(path):
@@ -42,14 +45,18 @@ def read_rows(path):
 
 
 def write_lookup(rows, bin_path, idx_path):
-    """Name-sorted blocks + the first name of each, for a binary search."""
-    rows = sorted(rows)
+    """Name-sorted blocks + the first name of each, for a binary search.
+
+    The tag id — the row's position in the id-ordered input — rides along, so a
+    query can be turned into the ids a post record actually stores and matched
+    against a record without resolving any names."""
+    rows = sorted((r[0], r[1], r[2], r[3], r[4], i) for i, r in enumerate(rows))
     index = []
     with open(bin_path, "wb") as fh:
         for i in range(0, len(rows), BLOCK):
             block = rows[i:i + BLOCK]
             index.append([block[0][0], fh.tell()])
-            body = "".join(f"{t},{c},{o},{l},{k}\n" for t, c, o, l, k in block)
+            body = "".join(f"{t},{c},{o},{l},{k},{n}\n" for t, c, o, l, k, n in block)
             fh.write(body.encode("utf-8"))
         end = fh.tell()
     with gzip.open(idx_path, "wt", encoding="utf-8", compresslevel=9) as fh:
@@ -64,9 +71,9 @@ def write_names(rows, bin_path, idx_path):
     artist, and one digit is cheaper than a second lookup."""
     offsets = []
     with open(bin_path, "wb") as fh:
-        for i in range(0, len(rows), BLOCK):
+        for i in range(0, len(rows), NAME_BLOCK):
             offsets.append(fh.tell())
-            body = "".join(f"{r[4]}{r[0]}\n" for r in rows[i:i + BLOCK])
+            body = "".join(f"{r[4]}{r[0]}\n" for r in rows[i:i + NAME_BLOCK])
             fh.write(body.encode("utf-8"))
         offsets.append(fh.tell())
     with open(idx_path, "wb") as fh:
@@ -103,9 +110,10 @@ def demo():
         assert idx["blocks"] == [["a_tag", 0]], idx
         assert idx["end"] == end == os.path.getsize(f"{d}/l.bin")
         body = open(f"{d}/l.bin", encoding="utf-8").read()
-        assert body.splitlines()[0] == "a_tag,9,10,20,1"
-        # a comma in a tag name still parses, because the last four fields win
-        assert body.splitlines()[2] == "c,comma,1,30,5,0"
+        # sorted by name, but each row keeps the id it had in the input
+        assert body.splitlines()[0] == "a_tag,9,10,20,1,1"
+        # a comma in a tag name still parses, because the last five fields win
+        assert body.splitlines()[2] == "c,comma,1,30,5,0,2"
 
         total = write_names(rows, f"{d}/n.bin", f"{d}/n.idx")
         assert open(f"{d}/n.bin", encoding="utf-8").read() == \

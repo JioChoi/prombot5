@@ -18,8 +18,10 @@ const LOOKUP_IDX_URL = `${DATA}/tag-lookup.json.gz`;
 const NAMES_URL = `${DATA}/tag-names.bin`;
 const NAMES_IDX_URL = `${DATA}/tag-names.idx`;
 const META_URL = `${DATA}/prompts.json`;
-// tags per block in both dictionary files; must match build_dict.BLOCK
-const BLOCK = 256;
+// tags per tag-names.bin block; must match build_dict.NAME_BLOCK. Small on
+// purpose: a prompt's thirty tags land in thirty scattered blocks, so the block
+// is sized to carry one name, not to be scanned.
+const NAME_BLOCK = 64;
 const POSTINGS_URL = `${DATA}/postings.bin`;
 const PROMPTS_URL = `${DATA}/prompts.bin`;
 const OFFSETS_URL = `${DATA}/prompts.idx`;
@@ -36,7 +38,7 @@ let loadingProfiles = null;
 let meta = null;
 let lookupIdx = null; // { block, end, blocks: [[firstTag, byteOffset], ...] }
 let namesIdx = null; // Uint32Array of block offsets, one past the end
-const dict = new Map(); // tag -> [offset, length, postings, category]
+const dict = new Map(); // tag -> [offset, length, postings, category, tag id]
 const names = new Map(); // tag id -> [tag, category], likewise
 const fetchedBlocks = new Map(); // block number -> in-flight or settled fetch
 const lists = new Map(); // tag -> Int32Array of post numbers, ascending
@@ -92,7 +94,7 @@ export function warmPromptIndex() {
     ]);
 }
 
-/** [offset, length, postings, category], or undefined for an unknown tag. */
+/** [offset, length, postings, category, id], or undefined for an unknown tag. */
 async function entry(tag) {
     if (dict.has(tag)) return dict.get(tag);
     await loadLookupIdx();
@@ -112,10 +114,10 @@ async function entry(tag) {
         const body = decode(await range(LOOKUP_URL, from, to));
         for (const line of body.split("\n")) {
             if (!line) continue;
-            // tag,count,off,len,cat — read from the right, tag names hold commas
+            // tag,count,off,len,cat,id — read from the right, tag names hold commas
             const f = line.split(",");
-            dict.set(f.slice(0, -4).join(","), [
-                +f.at(-3), +f.at(-2), +f.at(-4), +f.at(-1),
+            dict.set(f.slice(0, -5).join(","), [
+                +f.at(-4), +f.at(-3), +f.at(-5), +f.at(-2), +f.at(-1),
             ]);
         }
     });
@@ -127,10 +129,10 @@ async function entry(tag) {
 async function name(id) {
     if (names.has(id)) return names.get(id);
     await loadNamesIdx();
-    const b = Math.floor(id / BLOCK);
+    const b = Math.floor(id / NAME_BLOCK);
     await once(`n${b}`, async () => {
         const body = decode(await range(NAMES_URL, namesIdx[b], namesIdx[b + 1] - 1));
-        let at = b * BLOCK;
+        let at = b * NAME_BLOCK;
         for (const line of body.split("\n")) {
             // `<cat><name>`, one digit of danbooru category up front
             if (line) names.set(at++, [line.slice(1), +line[0]]);
@@ -229,7 +231,8 @@ function bound(minScore) {
     `1girl` is 7.4 MB of postings and a query with a fav floor wants the head of
     that, not the tail, so the bytes arrive a chunk at a time and stop early. A
     cached list is reused when it already reaches past the floor asked for. */
-const CHUNK = 1 << 20;
+const CHUNK = 1 << 16;
+const MAX_CHUNK = 1 << 20;
 
 async function postings(tag, limit) {
     const held = lists.get(tag);
@@ -242,11 +245,16 @@ async function postings(tag, limit) {
     let at = 0;
     let bytes = new Uint8Array(0);
     let read = 0;
+    // A read that stops at the floor usually stops early, so the first chunk is
+    // small; a list being read to its end doubles its way up to full size
+    // rather than paying a round trip per 64 KB.
+    let chunk = CHUNK;
 
     while (i < count) {
         if (at + 10 > bytes.length && read < len) {
             // keep the undecoded tail, it may hold a split varint
-            const want = Math.min(CHUNK, len - read);
+            const want = Math.min(chunk, len - read);
+            chunk = Math.min(chunk * 2, MAX_CHUNK);
             const more = await range(POSTINGS_URL, off + read, off + read + want - 1);
             const rest = bytes.subarray(at);
             const buf = new Uint8Array(rest.length + more.length);
@@ -364,12 +372,62 @@ async function select({ include = [], exclude = [], minScore = 0 }) {
     return { limit, hits, excluded: EMPTY };
 }
 
-export async function countPrompts(query) {
+/**
+ * A count without the posting lists, for showing something immediately.
+ *
+ * Exact counting has to intersect the lists, and two common tags are ~8 MB of
+ * them; the dictionary already knows each tag's total, so this multiplies the
+ * rates instead and costs one small block per tag.
+ *
+ * It assumes tags are independent, which they are not — `1girl` and `solo`
+ * co-occur far more than chance, `1girl` and `1boy` far less — so treat it as
+ * an order of magnitude, not an answer. Returns null when there is nothing to
+ * estimate from, i.e. when the exact path was already going to be free.
+ */
+export async function estimatePrompts(query) {
+    const { include = [], exclude = [], minScore = 0 } = query;
+    // one tag and nothing else is a dictionary read, and the dictionary is exact
+    if (include.length < 2 && !exclude.length) return null;
+
+    await loadMeta();
+    const limit = bound(minScore);
+    if (!limit) return 0;
+
+    const counts = await Promise.all(
+        include.map(async (t) => (await entry(t))?.[2] ?? 0),
+    );
+    if (counts.some((c) => !c)) return 0; // an unknown tag matches nothing
+
+    // Rates against the whole corpus, applied to the part above the floor.
+    let rate = 1;
+    for (const c of counts) rate *= c / meta.posts;
+    for (const t of exclude) {
+        const c = (await entry(t))?.[2] ?? 0;
+        rate *= 1 - c / meta.posts;
+    }
+    return Math.round(rate * limit);
+}
+
+/**
+ * The exact count, or null when it would cost more than `maxBytes` of posting
+ * list to work out. Counting is the one job that really does have to intersect
+ * the lists, and two common tags are megabytes of them — on a slow connection
+ * that is minutes for a number nobody waits on. The estimate above stands in.
+ */
+export async function countPrompts(query, maxBytes = Infinity) {
     // The dictionary already knows how many posts carry a tag. With no floor
     // and nothing to intersect, that number *is* the answer — no posting list.
     const { include = [], exclude = [], minScore = 0 } = query;
     if (include.length === 1 && !exclude.length && !minScore) {
         return (await entry(include[0]))?.[2] ?? 0;
+    }
+    if (maxBytes < Infinity) {
+        await loadMeta();
+        const limit = bound(minScore);
+        const named = await Promise.all([...include, ...exclude].map(entry));
+        // every list is read, each only as far as the floor
+        const bytes = named.reduce((n, e) => n + (e?.[1] ?? 0), 0) * (limit / meta.posts);
+        if (bytes > maxBytes) return null;
     }
     const { limit, hits, excluded } = await select(query);
     return hits ? hits.length : limit - excluded.length;
@@ -409,43 +467,214 @@ async function range(url, from, to) {
     return res.status === 206 ? bytes : bytes.subarray(from, to + 1);
 }
 
-/** One post's record, pulled with two range requests and nothing else. */
-async function record(post) {
-    // prompts.idx is uint32 LE with a trailing entry, so the pair brackets the
-    // record's bytes.
-    const ends = await range(OFFSETS_URL, post * 4, post * 4 + 7);
-    const view = new DataView(ends.buffer, ends.byteOffset, 8);
-    const from = view.getUint32(0, true);
-    const to = view.getUint32(4, true);
-
-    const bytes = await range(PROMPTS_URL, from, to - 1);
-    let at = 0;
+/** One record's tag ids, from `bytes` starting at `at`. Names are not resolved:
+    a candidate is judged on ids, and only the post that wins is spelled out. */
+function decodeRecord(bytes, at, post) {
     let fav, id, count;
     [fav, at] = varint(bytes, at);
     [id, at] = varint(bytes, at);
     [count, at] = varint(bytes, at);
 
-    const ids = [];
+    const ids = new Set();
     let tagId = 0;
     for (let i = 0; i < count; i++) {
         let gap;
         [gap, at] = varint(bytes, at);
-        ids.push((tagId += gap));
+        ids.add((tagId += gap));
     }
+    return { post, id, fav, ids };
+}
+
+/**
+ * The records of `n` consecutive posts, in two range requests however many
+ * posts that is: prompts.idx is uint32 LE, so one read of n+1 entries brackets
+ * a run of records that is itself contiguous in prompts.bin.
+ */
+async function window(from, n) {
+    const ends = await range(OFFSETS_URL, from * 4, (from + n) * 4 + 3);
+    const view = new DataView(ends.buffer, ends.byteOffset, ends.byteLength);
+    const start = view.getUint32(0, true);
+    const end = view.getUint32(n * 4, true);
+    const bytes = await range(PROMPTS_URL, start, end - 1);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        out.push(decodeRecord(bytes, view.getUint32(i * 4, true) - start, from + i));
+    }
+    return out;
+}
+
+/** A record with its tags spelled out, the shape callers get back. */
+async function named(rec) {
+    const ids = [...rec.ids];
     // Ids are count-descending, so a prompt's tags sit in a handful of blocks,
     // usually the first ones — after the first prompt these are all cache hits.
-    const named = await Promise.all(ids.map(name));
-    return { post, id, fav, tags: named.map((n) => n[0]), cats: named.map((n) => n[1]) };
+    const pairs = await Promise.all(ids.map(name));
+    return {
+        post: rec.post,
+        id: rec.id,
+        fav: rec.fav,
+        tags: pairs.map((n) => n[0]),
+        cats: pairs.map((n) => n[1]),
+    };
+}
+
+/* Sampling, which is how a random post is actually found.
+
+   Intersecting posting lists answers "which posts match" — but a draw only
+   needs *one* of them, and the lists are the expensive part of this index:
+   `1girl` alone is 7.4 MB. So candidates are tested instead of enumerated. A
+   record carries its own tag ids, and the dictionary knows the id of every tag
+   in the query, so a candidate is judged from its record and nothing else.
+
+   Candidates come from whichever source is cheaper for the query:
+
+     uniform — random runs of consecutive posts, ~60 bytes each. Costs one
+       record per 1/selectivity, so it wins whenever the query is not rare.
+     rarest — random entries of the smallest include tag's posting list, which
+       for a rare tag is the whole point: 100 posts instead of 7 million.
+
+   Posts are ordered by favourites, so a run of consecutive ones is a run of
+   near-equal fav_count rather than an independent draw. That is a real bias and
+   the reason the runs are short and scattered rather than one long one. */
+
+// bytes a candidate costs: prompts.bin / posts, plus its two prompts.idx entries
+const RECORD_BYTES = 62;
+const MAX_RUN = 256; // candidates per pair of range requests, at most
+const LANES = 4; // runs in flight at once, at most
+const PROBES = 16; // single records in flight at once, on the rarest-tag path
+const SCAN = 1024; // posting list short enough to walk rather than sample
+const BUDGET = 1 << 14; // candidates before giving up and counting exactly
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** Fisher-Yates over a copy, so a walk of a posting list is in no order. */
+function shuffled(list) {
+    const out = [...list];
+    for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+}
+
+/** Judge a candidate on ids alone. */
+function fits(rec, inc, exc) {
+    return inc.every((id) => rec.ids.has(id)) && !exc.some((id) => rec.ids.has(id));
+}
+
+/**
+ * Where to draw candidates from, and how many it should take: `{ from, need }`,
+ * `from` being a tag whose list to draw out of, or null for uniform.
+ *
+ * Independence is wrong — `1girl` and `solo` co-occur far above chance — but
+ * this only sizes the reads and picks between two paths that are both correct
+ * whichever it picks, so being out by a factor of a few costs a second round.
+ */
+function source(include, exclude, limit) {
+    let rate = 1;
+    for (const t of include) rate *= dict.get(t)[2] / meta.posts;
+    for (const t of exclude) if (dict.has(t)) rate *= 1 - dict.get(t)[2] / meta.posts;
+    const uniform = rate > 0 ? RECORD_BYTES / rate : Infinity;
+
+    let rarest = null;
+    for (const t of include) if (!rarest || dict.get(t)[2] < dict.get(rarest)[2]) rarest = t;
+    // the list is read only as far as the score floor, so scale by the prefix
+    const list = rarest ? dict.get(rarest)[1] * (limit / meta.posts) : Infinity;
+    if (uniform <= list) return { from: null, need: candidates(rate) };
+    // drawing from the list, the tag it belongs to is already satisfied
+    return { from: rarest, need: candidates(rate / (dict.get(rarest)[2] / meta.posts)) };
+}
+
+/** Candidates to try at a hit rate of `rate` — two expected hits' worth. */
+function candidates(rate) {
+    return rate > 0 ? clamp(Math.ceil(2 / rate), 1, BUDGET) : BUDGET;
+}
+
+/** A matching record found by sampling, or undefined if the budget ran out. */
+async function sample(query, limit, inc, exc) {
+    const { from, need } = source(query.include ?? [], query.exclude ?? [], limit);
+    // the rarest tag's list, ascending; every candidate is drawn out of it
+    const list = from ? clip(await postings(from, limit), limit) : null;
+    if (list && !list.length) return null; // no post carries it above the floor
+
+    // A list short enough to walk is walked, in a random order: then a miss is
+    // an answer rather than a budget running out, no post is fetched twice, and
+    // the hit is still an even draw — every match is equally likely to be in
+    // the first batch that finds one.
+    if (list && list.length <= SCAN) {
+        const order = shuffled(list);
+        const wide = clamp(need, 1, PROBES);
+        for (let i = 0; i < order.length; i += wide) {
+            const recs = await Promise.all(
+                order.slice(i, i + wide).map((p) => window(p, 1)),
+            );
+            const hits = recs.flat().filter((r) => fits(r, inc, exc));
+            if (hits.length) return hits[Math.floor(Math.random() * hits.length)];
+        }
+        return null;
+    }
+
+    // Sized to the query: a common one is answered by a single short run, and
+    // only a thin one pays for four long ones.
+    const run = list ? 1 : clamp(need, 1, MAX_RUN);
+    const lanes = clamp(Math.ceil(need / run), 1, list ? PROBES : LANES);
+
+    for (let seen = 0; seen < BUDGET; seen += run * lanes) {
+        const runs = await Promise.all(
+            Array.from({ length: lanes }, () =>
+                list
+                    // the list's own entries are already scattered, so these are
+                    // single records rather than runs
+                    ? window(list[Math.floor(Math.random() * list.length)], 1)
+                    : window(
+                          Math.floor(Math.random() * Math.max(1, limit - run)),
+                          Math.min(run, limit),
+                      ),
+            ),
+        );
+        const hits = runs.flat().filter((r) => r.post < limit && fits(r, inc, exc));
+        if (hits.length) return hits[Math.floor(Math.random() * hits.length)];
+    }
+    return undefined;
 }
 
 /** A random matching post, or null when nothing matches. */
 export async function randomPrompt(query) {
-    const { limit, hits, excluded } = await select(query);
-    const total = hits ? hits.length : limit - excluded.length;
-    if (total <= 0) return null;
-    const k = Math.floor(Math.random() * total);
-    const post = await record(hits ? hits[k] : skipping(k, excluded));
+    await loadMeta();
+    const include = query.include ?? [];
+    const exclude = query.exclude ?? [];
+    const limit = bound(query.minScore ?? 0);
+    let rec;
 
+    if (limit) {
+        // one dictionary block per named tag, and they go out together
+        await Promise.all([...include, ...exclude].map(entry));
+        if (include.every((t) => dict.has(t))) {
+            rec = await sample(
+                query,
+                limit,
+                include.map((t) => dict.get(t)[4]),
+                exclude.filter((t) => dict.has(t)).map((t) => dict.get(t)[4]),
+            );
+        } else {
+            rec = null; // an unknown include tag matches nothing
+        }
+    } else {
+        rec = null;
+    }
+
+    // Sampling gives up rather than proving a rare query empty; the posting
+    // lists can prove it, so that is what the last resort is for.
+    if (rec === undefined) {
+        const { hits, excluded } = await select(query);
+        const total = hits ? hits.length : limit - excluded.length;
+        if (total <= 0) return null;
+        const k = Math.floor(Math.random() * total);
+        [rec] = await window(hits ? hits[k] : skipping(k, excluded), 1);
+    }
+    if (!rec) return null;
+
+    const post = await named(rec);
     const drop = query.drop ?? [];
     const dropCats = query.dropCats ?? [];
     if (!drop.length && !dropCats.length) return post;
