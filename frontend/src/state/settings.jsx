@@ -48,6 +48,8 @@ export function SettingsProvider({ children }) {
         characters: usePersistentState("characters", []),
         // false = let the model decide where everyone stands (NovelAI's use_coords off).
         useCoords: usePersistentState("useCoords", false),
+        // Off means the prompt is only what you typed — nothing is drawn.
+        randomize: usePersistentState("randomize", true),
         include: usePersistentState("include", "1girl, outdoors"),
         exclude: usePersistentState("exclude", "speech bubble"),
         minScore: usePersistentState("minScore", 0),

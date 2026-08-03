@@ -105,6 +105,7 @@ export default function App() {
     const [negative] = useSetting("negative");
     const [characters] = useSetting("characters");
     const [useCoords] = useSetting("useCoords");
+    const [randomize] = useSetting("randomize");
     const [include] = useSetting("include");
     const [exclude] = useSetting("exclude");
     const [minScore] = useSetting("minScore");
@@ -129,7 +130,11 @@ export default function App() {
 
     /** One image, start to finish. Throws so the loop below can stop on failure. */
     async function once() {
-        const post = await randomPrompt(buildQuery({ include, exclude, minScore, filters }));
+        // With the draw switched off the prompt is only the pinned text, so no
+        // post is fetched and nothing can fail to match.
+        const post = randomize
+            ? await randomPrompt(buildQuery({ include, exclude, minScore, filters }))
+            : { tags: [], cats: [] };
         if (!post) throw new Error("No prompt matches these filters");
 
         const prompt = await buildPrompt({

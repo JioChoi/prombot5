@@ -135,6 +135,7 @@ export default function SettingsSheet() {
     // looking at, not what you configured.
     const [charTab, setCharTab] = useState({});
     const fieldOf = (id) => charTab[id] ?? "text";
+    const [randomize, setRandomize] = useSetting("randomize");
     const [include, setInclude] = useSetting("include");
     const [exclude, setExclude] = useSetting("exclude");
     const [minScore, setMinScore] = useSetting("minScore");
@@ -494,6 +495,21 @@ export default function SettingsSheet() {
 
                 {tab === "generator" ? (
                     <>
+                        <Group label="Random Tags">
+                            <Rows>
+                                <SwitchRow
+                                    active={randomize}
+                                    note="Draw tags from a random post and add them to your prompt"
+                                    onClick={() => setRandomize((v) => !v)}
+                                >
+                                    Generate random tags
+                                </SwitchRow>
+                            </Rows>
+                        </Group>
+
+                        {/* The draw's settings say nothing when there is no draw. */}
+                        {randomize ? (
+                        <>
                         <Group label="Include Tags">
                             <TextArea rows={2} value={include} onChange={setInclude} placeholder="rain, city lights" />
                         </Group>
@@ -544,6 +560,8 @@ export default function SettingsSheet() {
                         <p className="-mt-2 px-0.5 text-[11.5px] leading-snug text-dim">
                             Dimmed types are left out of generated prompts.
                         </p>
+                        </>
+                        ) : null}
 
                         <Group label="Processing">
                             <Rows>
