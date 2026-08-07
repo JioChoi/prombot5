@@ -172,8 +172,8 @@ function bound(minScore) {
     `1girl` is 7.4 MB of postings and a query with a fav floor wants the head of
     that, not the tail, so the bytes arrive a chunk at a time and stop early. A
     cached list is reused when it already reaches past the floor asked for. */
-const CHUNK = 1 << 16;
-const MAX_CHUNK = 1 << 20;
+const MIN_CHUNK = 1 << 18;
+const MAX_CHUNK = 1 << 22;
 
 async function postings(tag, limit) {
     const held = lists.get(tag);
@@ -186,10 +186,13 @@ async function postings(tag, limit) {
     let at = 0;
     let bytes = new Uint8Array(0);
     let read = 0;
-    // A read that stops at the floor usually stops early, so the first chunk is
-    // small; a list being read to its end doubles its way up to full size
-    // rather than paying a round trip per 64 KB.
-    let chunk = CHUNK;
+    // Size the first read for the whole job rather than creeping up to it. A
+    // range request costs about the same whether it carries 64 KB or 1 MB —
+    // over a CDN it is ~1s of latency either way — so the thing to minimise is
+    // the number of them, not the bytes. Post numbers run 0..posts and the list
+    // is roughly even across them, so reaching `limit` needs about that
+    // fraction of the bytes; the margin covers a tag that skews to the top.
+    let chunk = Math.max(MIN_CHUNK, Math.ceil((len * limit * 1.5) / meta.posts));
 
     while (i < count) {
         if (at + 10 > bytes.length && read < len) {
@@ -282,50 +285,69 @@ const EMPTY = new Int32Array(0);
  * matches are every post below `limit` except the ones in `excluded`, which is
  * far cheaper to keep than the complement of ten million posts.
  */
-async function select({ include = [], exclude = [], minScore = 0 }) {
+async function select({ include = [], exclude = [], minScore = 0 }, upto = 0) {
     await loadMeta();
-    const limit = bound(minScore);
+    // `upto` counts within the first N posts instead of the whole floor, which
+    // is how an estimate buys a bounded amount of reading. Posts are ranked by
+    // favourites, so that prefix is the most-liked slice, not a random one.
+    const limit = upto || bound(minScore);
     if (!limit) return { limit: 0, hits: EMPTY, excluded: EMPTY };
     if (!include.length && !exclude.length) return { limit, hits: null, excluded: EMPTY };
     // one block fetch per named tag, and they go out together
     await Promise.all([...include, ...exclude].map(entry));
     if (include.some((t) => !dict.has(t))) return { limit, hits: EMPTY, excluded: EMPTY };
 
+    // Every list this query needs, fetched at once. They were read one after
+    // another before, and each one is a round trip that dominates its own
+    // decode — two tags meant waiting out two latencies in series.
+    const wanted = [...include, ...exclude].filter((t) => dict.has(t));
+    const read = new Map(
+        await Promise.all(
+            wanted.map(async (t) => [t, clip(await postings(t, limit), limit)]),
+        ),
+    );
+
     // Smallest list first: it caps the size of every merge after it.
     const inc = include.sort((a, b) => dict.get(a)[2] - dict.get(b)[2]);
-    let hits = inc.length ? clip(await postings(inc[0], limit), limit) : null;
+    let hits = inc.length ? read.get(inc[0]) : null;
     for (const tag of inc.slice(1)) {
         if (!hits.length) return { limit, hits: EMPTY, excluded: EMPTY };
-        hits = merge(hits, clip(await postings(tag, limit), limit), true);
+        hits = merge(hits, read.get(tag), true);
     }
     if (!hits) {
         // Excluded lists overlap, so union them rather than summing.
         let out = EMPTY;
         for (const tag of exclude) {
-            if (dict.has(tag)) out = union(out, clip(await postings(tag, limit), limit));
+            if (read.has(tag)) out = union(out, read.get(tag));
         }
         return { limit, hits: null, excluded: out };
     }
     for (const tag of exclude) {
-        if (!hits.length || !dict.has(tag)) continue;
-        hits = merge(hits, clip(await postings(tag, limit), limit), false);
+        if (!hits.length || !read.has(tag)) continue;
+        hits = merge(hits, read.get(tag), false);
     }
     return { limit, hits, excluded: EMPTY };
 }
 
+/** How much posting list an estimate is allowed to read. ~0.4 MB is a fifth of
+    a second on a slow connection, against ~8 MB for two common tags. */
+const ESTIMATE_BYTES = 400_000;
+
 /**
- * A count without the posting lists, for showing something immediately.
+ * A count from a slice of the corpus rather than all of it.
  *
- * Exact counting has to intersect the lists, and two common tags are ~8 MB of
- * them; the dictionary already knows each tag's total, so this multiplies the
- * rates instead and costs one small block per tag.
+ * Exact counting has to intersect whole posting lists. This intersects the same
+ * lists over the first N posts only — a real intersection, so co-occurrence is
+ * measured rather than assumed — and scales the answer up. Reading stops at N,
+ * which is what bounds the cost.
  *
- * It assumes tags are independent, which they are not — `1girl` and `solo`
- * co-occur far more than chance, `1girl` and `1boy` far less — so treat it as
- * an order of magnitude, not an answer. Returns null when there is nothing to
- * estimate from, i.e. when the exact path was already going to be free.
+ * The bias is that posts are ranked by favourites, so the slice is the
+ * best-liked part of the corpus and tags that skew popular are over-counted.
+ * That beats assuming independence, which is wrong by 10x on correlated pairs.
+ *
+ * Returns null when the exact count was going to be cheap anyway.
  */
-export async function estimatePrompts(query) {
+export async function estimatePrompts(query, budget = ESTIMATE_BYTES) {
     const { include = [], exclude = [], minScore = 0 } = query;
     // one tag and nothing else is a dictionary read, and the dictionary is exact
     if (include.length < 2 && !exclude.length) return null;
@@ -334,19 +356,17 @@ export async function estimatePrompts(query) {
     const limit = bound(minScore);
     if (!limit) return 0;
 
-    const counts = await Promise.all(
-        include.map(async (t) => (await entry(t))?.[2] ?? 0),
-    );
-    if (counts.some((c) => !c)) return 0; // an unknown tag matches nothing
+    const named = await Promise.all([...include, ...exclude].map(entry));
+    if (include.some((t) => !dict.has(t))) return 0; // unknown tag, no matches
 
-    // Rates against the whole corpus, applied to the part above the floor.
-    let rate = 1;
-    for (const c of counts) rate *= c / meta.posts;
-    for (const t of exclude) {
-        const c = (await entry(t))?.[2] ?? 0;
-        rate *= 1 - c / meta.posts;
-    }
-    return Math.round(rate * limit);
+    // Bytes to read every list as far as the floor, and the slice that fits.
+    const full = named.reduce((n, e) => n + (e?.[1] ?? 0), 0) * (limit / meta.posts);
+    if (full <= budget) return null; // cheap enough to be exact
+    const upto = Math.max(1, Math.floor((limit * budget) / full));
+
+    const { hits, excluded } = await select(query, upto);
+    const found = hits ? hits.length : upto - excluded.length;
+    return Math.round(found * (limit / upto));
 }
 
 /**
