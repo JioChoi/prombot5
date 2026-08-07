@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Dices, Eye, EyeOff, Loader2, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { freeCell } from "../lib/position.js";
-import { buildQuery, countPrompts, estimatePrompts } from "../lib/promptIndex.js";
+import { buildQuery, promptCount } from "../lib/promptIndex.js";
 import { useSetting } from "../state/settings.jsx";
 import Dropdown from "./Dropdown.jsx";
 import PositionGrid from "./PositionGrid.jsx";
@@ -170,29 +170,18 @@ export default function SettingsSheet() {
         setCounting(true);
         const timer = setTimeout(() => {
             const query = buildQuery({ include, exclude, minScore, filters });
-            // The estimate costs a couple of small reads and lands almost at
-            // once; the exact count has to pull whole posting lists, which for
-            // two common tags is megabytes. Show the rough number rather than a
-            // spinner, and overwrite it when the real one arrives.
-            //
-            // `exact` guards the order: a cached count resolves immediately, and
-            // the estimate must not land on top of the real answer.
-            let exact = false;
-            estimatePrompts(query).then(
-                (n) =>
-                    live && !exact && n !== null &&
-                    setMatches(`about ${n.toLocaleString()} prompts`),
-                () => {},
-            );
-            // Capped: past a few hundred KB of posting list the exact count is
-            // not worth the wait on a slow connection, and it says null so the
-            // estimate stays up.
-            countPrompts(query, 400_000).then(
-                (n) => {
-                    if (n === null) return;
-                    exact = true;
-                    if (live) setMatches(`${n.toLocaleString()} prompts available`);
-                },
+            // One call, one answer: exact when the posting lists are small
+            // enough to read, sampled when they are not. Asking for both and
+            // racing them left a band of queries where neither replied and the
+            // previous number stayed on screen.
+            promptCount(query).then(
+                ({ n, exact }) =>
+                    live &&
+                    setMatches(
+                        exact
+                            ? `${n.toLocaleString()} prompts available`
+                            : `about ${n.toLocaleString()} prompts`,
+                    ),
                 () => live && setMatches("Prompt index unavailable"),
             ).finally(() => live && setCounting(false));
         }, 300);

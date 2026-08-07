@@ -329,9 +329,18 @@ async function select({ include = [], exclude = [], minScore = 0 }, upto = 0) {
     return { limit, hits, excluded: EMPTY };
 }
 
-/** How much posting list an estimate is allowed to read. ~0.4 MB is a fifth of
-    a second on a slow connection, against ~8 MB for two common tags. */
-const ESTIMATE_BYTES = 400_000;
+/**
+ * How much posting list a count may read before it estimates instead.
+ *
+ * The same number on both sides on purpose: countPrompts gives up above it and
+ * estimatePrompts takes over below it, so exactly one of them answers. Two
+ * budgets would drift and leave a query that neither will touch.
+ *
+ * Sized to about one request — a range request costs ~1s of latency whatever
+ * it carries, so a bigger budget is nearly free and keeps more queries on the
+ * exact path, where the answer cannot wobble as the floor moves.
+ */
+export const COUNT_BUDGET = 1_200_000;
 
 /**
  * A count from a slice of the corpus rather than all of it.
@@ -347,10 +356,13 @@ const ESTIMATE_BYTES = 400_000;
  *
  * Returns null when the exact count was going to be cheap anyway.
  */
-export async function estimatePrompts(query, budget = ESTIMATE_BYTES) {
+export async function estimatePrompts(query, budget = COUNT_BUDGET) {
     const { include = [], exclude = [], minScore = 0 } = query;
-    // one tag and nothing else is a dictionary read, and the dictionary is exact
-    if (include.length < 2 && !exclude.length) return null;
+    // Only bow out where countPrompts answers for free, or nothing shows the
+    // number at all: it returns null once the lists cost more than its budget,
+    // and one tag *with a floor* is not the free case — the dictionary knows a
+    // tag's total over the whole corpus, not over the part above a floor.
+    if (!exclude.length && !minScore && include.length < 2) return null;
 
     await loadMeta();
     const limit = bound(minScore);
@@ -366,7 +378,18 @@ export async function estimatePrompts(query, budget = ESTIMATE_BYTES) {
 
     const { hits, excluded } = await select(query, upto);
     const found = hits ? hits.length : upto - excluded.length;
-    return Math.round(found * (limit / upto));
+
+    // Pin the extrapolation between what is already known for certain. The
+    // slice is part of the range, so its count is a floor; an intersection
+    // cannot outgrow its smallest list or the corpus above the fav floor, so
+    // that is the ceiling. Without this a tag whose posts crowd the popular
+    // end scales past its own total — `1girl` above a floor of 1 came out at
+    // 8.5M against a corpus-wide 7.4M, which reads as the count going *down*
+    // when the floor is dropped to nothing and the exact answer takes over.
+    const ceiling = include.length
+        ? Math.min(limit, ...include.map((t) => dict.get(t)[2]))
+        : limit;
+    return Math.min(Math.max(found, Math.round(found * (limit / upto))), ceiling);
 }
 
 /**
@@ -392,6 +415,21 @@ export async function countPrompts(query, maxBytes = Infinity) {
     }
     const { limit, hits, excluded } = await select(query);
     return hits ? hits.length : limit - excluded.length;
+}
+
+/**
+ * How many posts a query draws from: `{ n, exact }`.
+ *
+ * The one entry point for a count, because the two paths below only work as a
+ * pair. countPrompts gives up above a byte budget and estimatePrompts takes
+ * over below it, and if the two budgets ever disagree there is a band of
+ * queries neither will answer — which showed up as the number freezing on the
+ * previous, smaller figure while the fav floor was lowered.
+ */
+export async function promptCount(query) {
+    const n = await countPrompts(query, COUNT_BUDGET);
+    if (n !== null) return { n, exact: true };
+    return { n: await estimatePrompts(query), exact: false };
 }
 
 /** The k-th post below `limit` that `excluded` (ascending) doesn't cover. */
