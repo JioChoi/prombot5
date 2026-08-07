@@ -1,0 +1,31 @@
+<!doctype html>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>character pictures</title>
+<style>
+body{margin:0;background:#111;color:#eee;font:14px system-ui}
+input{position:sticky;top:0;width:100%;box-sizing:border-box;padding:10px;
+      border:0;background:#222;color:#eee;font:16px system-ui}
+ul{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:0;padding:4px;
+   list-style:none}
+img{width:100%;aspect-ratio:3/4;object-fit:cover;background:#222;display:block}
+figcaption{padding:2px 0 6px;word-break:break-all;font-size:11px;color:#aaa}
+</style>
+<input id=q placeholder="filter">
+<ul id=grid></ul>
+<script>
+// the file list is whatever `python -m http.server -d character_dict` lists
+fetch('./images/').then(r => r.text()).then(html => {
+  const files = [...html.matchAll(/href="([^"]+\.webp)"/g)]
+                  .map(m => 'images/' + decodeURIComponent(m[1]));
+  const grid = document.getElementById('grid'), q = document.getElementById('q');
+  const draw = () => {
+    const term = q.value.toLowerCase();
+    grid.innerHTML = files.filter(f => f.toLowerCase().includes(term))
+      .map(f => `<li><figure style=margin:0><img loading=lazy src="${f}">
+                 <figcaption>${f.replace(/\.\w+$/, '')}</figcaption></figure>`)
+      .join('');
+  };
+  q.oninput = draw;
+  draw();
+});
+</script>

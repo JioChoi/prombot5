@@ -1,40 +1,32 @@
-"""Turn prompt-tags.csv.gz into files the client can range-request.
+"""Turn prompt-tags.csv.gz into the one dictionary file the client loads.
 
-The old dictionary was one 11 MB gzip holding all 928k tags, and every query
-that named a tag paid for the whole thing — 30 MB of text to parse before the
-first count appeared. Almost none of it is ever used: a query touches a handful
-of tags, and a prompt names thirty.
+    tag-dict.csv.gz   tag,count,off,len,cat,id — one row per tag, gzipped.
 
-So the same rows go out twice, blocked both ways a client reads them:
+This used to go out as four files blocked for range requests: a name-sorted
+dictionary with a block index, and names in id order with an offset table. That
+made *looking a tag up* cheap, but decoding a drawn post is thirty scattered
+name blocks, which is thirty round trips before a prompt can be shown.
 
-  tag-lookup.bin   tag,count,off,len,cat,id — tags sorted by name, 256 per block.
-                   Looking a tag up is one range request for its block.
-  tag-lookup.json.gz  [firstTagOfBlock, byteOffset] per block, plus the file
-                   length. ~60 KB, the only part loaded up front.
-  tag-names.bin    names in tag-id order, 64 per block, each line prefixed
-                   with its one-digit danbooru category. Decoding a record
-                   needs the names of its ids and nothing else.
-  tag-names.idx    uint32 LE block offsets, one per block plus a terminator.
+Cutting tags used fewer than MIN_COUNT times is what makes the whole thing fit
+in memory instead: 928k tags is 36 MB, the 109k tags used 50+ times are 4.5 MB
+(2 MB gzipped) and still cover 98.6% of every tag occurrence in the corpus. So
+the client downloads it once and every lookup after that is a Map hit.
 
-Ids are assigned count-descending, so a typical post's tags cluster in the
-first few name blocks and the cache fills up fast. Name blocks are the smaller
-of the two: a prompt names thirty scattered tags and pays a block for each, so
-that block is sized for one tag, not for a scan.
+Ids are the row's position in the id-ordered input and are NOT renumbered when
+rows are cut, because prompts.bin and postings.bin store those ids and are not
+rebuilt. A cut tag simply has no row here: its postings are unreachable, and a
+post record mentioning it resolves to nothing and drops the tag.
 
 Runs off the built csv — no dump, no duckdb:
 
-    python build_dict.py
+    python build_dict.py [--min-count 50]
 """
 
 import argparse
 import csv
 import gzip
-import json
-import os
-import struct
 
-BLOCK = 256       # tags per tag-lookup.bin block
-NAME_BLOCK = 64   # tags per tag-names.bin block
+MIN_COUNT = 50
 
 
 def read_rows(path):
@@ -44,81 +36,62 @@ def read_rows(path):
                  int(r["cat"])) for r in csv.DictReader(fh)]
 
 
-def write_lookup(rows, bin_path, idx_path):
-    """Name-sorted blocks + the first name of each, for a binary search.
+def write_dict(rows, path, min_count=MIN_COUNT):
+    """One gzipped row per surviving tag, carrying the id it had in `rows`.
 
-    The tag id — the row's position in the id-ordered input — rides along, so a
-    query can be turned into the ids a post record actually stores and matched
-    against a record without resolving any names."""
-    rows = sorted((r[0], r[1], r[2], r[3], r[4], i) for i, r in enumerate(rows))
-    index = []
-    with open(bin_path, "wb") as fh:
-        for i in range(0, len(rows), BLOCK):
-            block = rows[i:i + BLOCK]
-            index.append([block[0][0], fh.tell()])
-            body = "".join(f"{t},{c},{o},{l},{k},{n}\n" for t, c, o, l, k, n in block)
-            fh.write(body.encode("utf-8"))
-        end = fh.tell()
-    with gzip.open(idx_path, "wt", encoding="utf-8", compresslevel=9) as fh:
-        json.dump({"block": BLOCK, "end": end, "blocks": index}, fh)
-    return end
+    Sorted by name: it is what the file reads as, and neighbouring tag names
+    share prefixes, which is worth a few percent to gzip."""
+    kept = sorted((r[0], r[1], r[2], r[3], r[4], i)
+                  for i, r in enumerate(rows) if r[1] >= min_count)
+    body = "".join(f"{t},{c},{o},{l},{k},{n}\n" for t, c, o, l, k, n in kept)
+    with gzip.open(path, "wb", compresslevel=9) as fh:
+        fh.write(body.encode("utf-8"))
+    return kept, len(body)
 
 
-def write_names(rows, bin_path, idx_path):
-    """Names in id order, blocked, with a uint32 offset table.
-
-    Each line is `<cat><name>`: the client needs a tag's category to label an
-    artist, and one digit is cheaper than a second lookup."""
-    offsets = []
-    with open(bin_path, "wb") as fh:
-        for i in range(0, len(rows), NAME_BLOCK):
-            offsets.append(fh.tell())
-            body = "".join(f"{r[4]}{r[0]}\n" for r in rows[i:i + NAME_BLOCK])
-            fh.write(body.encode("utf-8"))
-        offsets.append(fh.tell())
-    with open(idx_path, "wb") as fh:
-        fh.write(struct.pack(f"<{len(offsets)}I", *offsets))
-    return offsets[-1]
-
-
-def build(out="frontend/public", src="data/prompt-tags.csv.gz"):
+def build(out="frontend/public", src="data/prompt-tags.csv.gz",
+          min_count=MIN_COUNT):
     rows = read_rows(src)
-    lookup = write_lookup(rows, f"{out}/tag-lookup.bin",
-                          f"{out}/tag-lookup.json.gz")
-    names = write_names(rows, f"{out}/tag-names.bin", f"{out}/tag-names.idx")
-    idx = os.path.getsize(f"{out}/tag-lookup.json.gz")
-    print(f"{len(rows)} tags -> lookup {lookup / 1e6:.1f} MB "
-          f"(index {idx / 1e3:.0f} KB up front), names {names / 1e6:.1f} MB")
+    kept, raw = write_dict(rows, f"{out}/tag-dict.csv.gz", min_count)
+    import os
+    gz = os.path.getsize(f"{out}/tag-dict.csv.gz")
+    occ = sum(r[1] for r in rows)
+    held = sum(r[1] for r in kept)
+    print(f"{len(kept)} of {len(rows)} tags (count >= {min_count}) -> "
+          f"{raw / 1e6:.1f} MB raw, {gz / 1e6:.2f} MB gzipped; "
+          f"{held / occ * 100:.2f}% of tag occurrences kept")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="frontend/public")
     ap.add_argument("--src", default="data/prompt-tags.csv.gz")
+    ap.add_argument("--min-count", type=int, default=MIN_COUNT)
     args = ap.parse_args()
-    build(args.out, args.src)
+    build(args.out, args.src, args.min_count)
 
 
 def demo():
     rows = [("b_tag", 5, 0, 10, 0), ("a_tag", 9, 10, 20, 1),
-            ("c,comma", 1, 30, 5, 0)]
+            ("c,comma", 60, 30, 5, 0), ("d_tag", 50, 35, 7, 3)]
     import tempfile
     with tempfile.TemporaryDirectory() as d:
-        end = write_lookup(rows, f"{d}/l.bin", f"{d}/l.json.gz")
-        with gzip.open(f"{d}/l.json.gz", "rt") as fh:
-            idx = json.load(fh)
-        assert idx["blocks"] == [["a_tag", 0]], idx
-        assert idx["end"] == end == os.path.getsize(f"{d}/l.bin")
-        body = open(f"{d}/l.bin", encoding="utf-8").read()
-        # sorted by name, but each row keeps the id it had in the input
-        assert body.splitlines()[0] == "a_tag,9,10,20,1,1"
-        # a comma in a tag name still parses, because the last five fields win
-        assert body.splitlines()[2] == "c,comma,1,30,5,0,2"
+        kept, _ = write_dict(rows, f"{d}/t.csv.gz", min_count=50)
+        body = gzip.open(f"{d}/t.csv.gz", "rt", encoding="utf-8").read()
+        lines = body.splitlines()
 
-        total = write_names(rows, f"{d}/n.bin", f"{d}/n.idx")
-        assert open(f"{d}/n.bin", encoding="utf-8").read() == \
-            "0b_tag\n1a_tag\n0c,comma\n"  # id order with category prefix
-        assert struct.unpack("<2I", open(f"{d}/n.idx", "rb").read()) == (0, total)
+        # Under the cut, so they are gone entirely.
+        assert not any(l.startswith("a_tag,") for l in lines), lines
+        assert not any(l.startswith("b_tag,") for l in lines), lines
+        # Exactly at the cut counts as kept — the check is >=, not >.
+        assert any(l.startswith("d_tag,") for l in lines), lines
+
+        # Ids are positions in the *input*, so cutting rows must not renumber
+        # the survivors: prompts.bin still refers to them by the old id.
+        assert lines[0] == "c,comma,60,30,5,0,2", lines
+        assert lines[1] == "d_tag,50,35,7,3,3", lines
+        # A comma in a tag name still parses, because the last five fields win.
+        assert ",".join(lines[0].split(",")[:-5]) == "c,comma"
     print("ok")
 
 

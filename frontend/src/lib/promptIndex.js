@@ -13,15 +13,8 @@
    request. */
 const DATA = import.meta.env?.VITE_DATA ?? "";
 
-const LOOKUP_URL = `${DATA}/tag-lookup.bin`;
-const LOOKUP_IDX_URL = `${DATA}/tag-lookup.json.gz`;
-const NAMES_URL = `${DATA}/tag-names.bin`;
-const NAMES_IDX_URL = `${DATA}/tag-names.idx`;
+const DICT_URL = `${DATA}/tag-dict.csv.gz`;
 const META_URL = `${DATA}/prompts.json`;
-// tags per tag-names.bin block; must match build_dict.NAME_BLOCK. Small on
-// purpose: a prompt's thirty tags land in thirty scattered blocks, so the block
-// is sized to carry one name, not to be scanned.
-const NAME_BLOCK = 64;
 const POSTINGS_URL = `${DATA}/postings.bin`;
 const PROMPTS_URL = `${DATA}/prompts.bin`;
 const OFFSETS_URL = `${DATA}/prompts.idx`;
@@ -31,16 +24,12 @@ const PROFILES_URL = `${DATA}/characters.csv.gz`;
 export const ARTIST = 1;
 
 let loadingMeta = null;
-let loadingLookupIdx = null;
-let loadingNamesIdx = null;
+let loadingDict = null;
 let loadingGroups = null;
 let loadingProfiles = null;
 let meta = null;
-let lookupIdx = null; // { block, end, blocks: [[firstTag, byteOffset], ...] }
-let namesIdx = null; // Uint32Array of block offsets, one past the end
 const dict = new Map(); // tag -> [offset, length, postings, category, tag id]
-const names = new Map(); // tag id -> [tag, category], likewise
-const fetchedBlocks = new Map(); // block number -> in-flight or settled fetch
+const names = new Map(); // tag id -> [tag, category], the same rows by id
 const lists = new Map(); // tag -> Int32Array of post numbers, ascending
 const groups = new Map(); // tag -> ["attire", "nsfw", ...]
 const profiles = new Map(); // character -> { series, features, attire }
@@ -55,105 +44,57 @@ function loadMeta() {
     return loadingMeta;
 }
 
-/* 49 KB: the first tag name of each 256-tag block of tag-lookup.bin. A query
-   binary-searches this, then range-requests the one block it landed in — the
-   whole dictionary is 28 MB and no query has ever needed more than a sliver. */
-function loadLookupIdx() {
-    loadingLookupIdx ??= text(LOOKUP_IDX_URL).then((json) => {
-        lookupIdx = JSON.parse(json);
-    });
-    return loadingLookupIdx;
-}
-
-/** 14 KB: byte offset of each block of tag-names.bin, plus a terminator. */
-function loadNamesIdx() {
-    loadingNamesIdx ??= fetch(NAMES_IDX_URL)
-        .then((r) => r.arrayBuffer())
-        .then((b) => {
-            namesIdx = new Uint32Array(b);
-        });
-    return loadingNamesIdx;
-}
-
 /**
- * Every whole-file this module reads, fetched up front — about 660 KB, most of
- * it the character profiles. Without this the first Generate pays for all of
- * them serially before it can even pick a post, which read as the app hanging
- * unless the Generator tab had already been opened and warmed them.
+ * Every whole-file this module reads, fetched up front — about 2.6 MB, most of
+ * it the dictionary. Without this the first Generate pays for all of them
+ * serially before it can even pick a post, which read as the app hanging.
  *
- * The blocked files (the dictionary, postings, records) stay on demand: they are
- * tens of megabytes and a run touches a sliver.
+ * The corpus itself stays on demand and range-read: postings.bin and
+ * prompts.bin are a gigabyte between them, and a run touches a sliver.
  */
 export function warmPromptIndex() {
-    return Promise.all([
-        loadMeta(),
-        loadLookupIdx(),
-        loadNamesIdx(),
-        loadGroups(),
-        loadProfiles(),
-    ]);
+    return Promise.all([loadMeta(), loadDict(), loadGroups(), loadProfiles()]);
+}
+
+/* 2 MB gzipped: every tag used 50 times or more, which is 109k of the 928k in
+   the corpus but 98.6% of all tag occurrences. It used to be blocked and
+   range-requested, which made looking one tag up cheap and decoding a drawn
+   post expensive — thirty scattered tags meant thirty round trips before a
+   prompt could be shown. Held whole instead, every lookup below is a Map hit.
+
+   Cut tags are simply absent: their postings are unreachable and a record that
+   mentions one resolves to nothing, so they never reach a prompt. */
+function loadDict() {
+    loadingDict ??= text(DICT_URL).then((csv) => {
+        for (const line of csv.split("\n")) {
+            if (!line) continue;
+            // tag,count,off,len,cat,id — read from the right, tag names hold commas
+            const f = line.split(",");
+            const tag = f.slice(0, -5).join(",");
+            const cat = +f.at(-2);
+            const id = +f.at(-1);
+            dict.set(tag, [+f.at(-4), +f.at(-3), +f.at(-5), cat, id]);
+            names.set(id, [tag, cat]);
+        }
+    });
+    return loadingDict;
 }
 
 /** [offset, length, postings, category, id], or undefined for an unknown tag. */
 async function entry(tag) {
-    if (dict.has(tag)) return dict.get(tag);
-    await loadLookupIdx();
-    const b = lookupIdx.blocks;
-    // last block whose first tag is <= the one we want
-    let lo = 0;
-    let hi = b.length;
-    while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (b[mid][0] <= tag) lo = mid + 1;
-        else hi = mid;
-    }
-    if (!lo) return undefined; // sorts before the first tag in the file
-    const from = b[lo - 1][1];
-    const to = (lo < b.length ? b[lo][1] : lookupIdx.end) - 1;
-    await once(`l${lo}`, async () => {
-        const body = decode(await range(LOOKUP_URL, from, to));
-        for (const line of body.split("\n")) {
-            if (!line) continue;
-            // tag,count,off,len,cat,id — read from the right, tag names hold commas
-            const f = line.split(",");
-            dict.set(f.slice(0, -5).join(","), [
-                +f.at(-4), +f.at(-3), +f.at(-5), +f.at(-2), +f.at(-1),
-            ]);
-        }
-    });
+    await loadDict();
     return dict.get(tag);
 }
 
-/** [tag, category] for a record's id. Ids are count-descending, so the blocks a
-    prompt needs are mostly the first ones, already cached. */
+/** [tag, category] for a record's id, or undefined when the tag was cut. */
 async function name(id) {
-    if (names.has(id)) return names.get(id);
-    await loadNamesIdx();
-    const b = Math.floor(id / NAME_BLOCK);
-    await once(`n${b}`, async () => {
-        const body = decode(await range(NAMES_URL, namesIdx[b], namesIdx[b + 1] - 1));
-        let at = b * NAME_BLOCK;
-        for (const line of body.split("\n")) {
-            // `<cat><name>`, one digit of danbooru category up front
-            if (line) names.set(at++, [line.slice(1), +line[0]]);
-        }
-    });
+    await loadDict();
     return names.get(id);
 }
 
 /** The danbooru category of any tag, drawn or typed, or undefined if unknown. */
 export async function categoryOf(tag) {
     return (await entry(tag))?.[3];
-}
-
-/** Run `work` once per key, even when several callers race for the block. */
-function once(key, work) {
-    if (!fetchedBlocks.has(key)) fetchedBlocks.set(key, work());
-    return fetchedBlocks.get(key);
-}
-
-function decode(bytes) {
-    return new TextDecoder().decode(bytes);
 }
 
 /* Which subsets a tag belongs to — a tag can be in several, `crotchless_panties`
@@ -506,15 +447,17 @@ async function window(from, n) {
 /** A record with its tags spelled out, the shape callers get back. */
 async function named(rec) {
     const ids = [...rec.ids];
-    // Ids are count-descending, so a prompt's tags sit in a handful of blocks,
-    // usually the first ones — after the first prompt these are all cache hits.
     const pairs = await Promise.all(ids.map(name));
+    // A tag under the dictionary's cut has no row, so it resolves to nothing
+    // and is dropped here. That is what keeps rare tags out of drawn prompts:
+    // the records still hold their ids, and nothing can name them.
+    const known = pairs.filter(Boolean);
     return {
         post: rec.post,
         id: rec.id,
         fav: rec.fav,
-        tags: pairs.map((n) => n[0]),
-        cats: pairs.map((n) => n[1]),
+        tags: known.map((n) => n[0]),
+        cats: known.map((n) => n[1]),
     };
 }
 
