@@ -176,6 +176,14 @@ export default function App() {
             ...s,
         ]);
         setActiveId(null);
+        // Drop the progress image here, not when the run ends: the stage prefers
+        // the preview over the finished shot, so a loop that kept it would show
+        // the last JPEG right through the countdown and into the next image —
+        // the finished PNG would never appear at all.
+        setPreview((old) => {
+            if (old) URL.revokeObjectURL(old);
+            return null;
+        });
         if (autoDownload) download(src, name);
     }
 
