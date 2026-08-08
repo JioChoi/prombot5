@@ -16,3 +16,7 @@ services:
         sync: false
       - key: PROXY_KEY
         sync: false
+      # Presets. mysql://user:password@host:port/defaultdb — carries the
+      # password, so dashboard-only like the rest.
+      - key: DATABASE_URL
+        sync: false

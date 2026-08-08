@@ -10,11 +10,17 @@ browser talks here, and here talks to the relays.
 import os
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
+import presets
 import relay
+
+# run.sh already exports .env, but uvicorn started by hand does not — and the
+# database connection reads PG* straight out of the environment.
+load_dotenv()
 
 # Not api.novelai.net: that host rejects persistent (pst-) API keys outright, answering
 # "Please refresh NovelAI.net. If using a third-party tool, update to the image URL."
@@ -35,9 +41,11 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ORIGINS,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+app.include_router(presets.router)
 
 
 @app.get("/health")

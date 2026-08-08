@@ -1,9 +1,10 @@
-import { History, Infinity as InfinityIcon } from "lucide-react";
+import { Bookmark, History, Infinity as InfinityIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import BottomSheet from "./components/BottomSheet.jsx";
 import CharactersTab from "./components/CharactersTab.jsx";
 import HistoryDrawer from "./components/HistoryDrawer.jsx";
 import LoginSheet from "./components/LoginSheet.jsx";
+import PresetsDrawer from "./components/PresetsDrawer.jsx";
 import SettingsSheet from "./components/SettingsSheet.jsx";
 import usePersistentState from "./hooks/usePersistentState.js";
 import { keepAwake, releaseAwake } from "./lib/keepAwake.js";
@@ -105,6 +106,10 @@ export default function App() {
     const [activeId, setActiveId] = useState(null);
     const [autoGen, setAutoGen] = useState(false);
     const [loginOpen, setLoginOpen] = useState(false);
+    const [presetsOpen, setPresetsOpen] = useState(false);
+    // Which preset the console is currently holding. Kept across reloads so the
+    // drawer opens on the one you were working in, ready to overwrite.
+    const [preset, setPreset] = usePersistentState("preset", "");
     const [token, setToken] = usePersistentState("naiToken", "");
     const [anlas, setAnlas] = useState(null);
     // The in-flight generation: its latest progress image, and how long is left
@@ -306,6 +311,30 @@ export default function App() {
             {/* Hidden, not unmounted: a loop started here keeps running while the
                 character list is open, and comes back exactly as it was. */}
             <div className={tab === "generate" ? "contents" : "hidden"}>
+            {/* Presets. Top-left of the stage — pushed clear of the sidebar at the
+                width where the sidebar exists, the same offset the dock uses. The
+                loaded preset's name rides along, so the console always says which
+                setup you are in. */}
+            <button
+                type="button"
+                onClick={() => setPresetsOpen(true)}
+                aria-label={preset ? `Presets — ${preset} loaded` : "Presets"}
+                className="fixed left-3 z-40 flex max-w-[45vw] items-center gap-1.5 rounded-full border
+                           border-hair bg-[#33333a]/60 px-2.5 py-1.5 text-mut backdrop-blur-2xl
+                           transition-colors active:text-fg
+                           shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14)]
+                           md:left-[calc(var(--sidebar)+0.75rem)]"
+                style={{ top: "calc(0.75rem + env(safe-area-inset-top))" }}
+            >
+                <Bookmark
+                    strokeWidth={1.75}
+                    className={`h-[15px] w-[15px] shrink-0 ${preset ? "text-accent-lit" : ""}`}
+                />
+                {preset ? (
+                    <span className="truncate text-[12.5px] font-medium text-fg">{preset}</span>
+                ) : null}
+            </button>
+
             {/* Stage. The progress image wins while one is running — that is the
                 whole point of streaming — and the last finished image otherwise. */}
             {/* md:pl clears the sidebar, which is always open at that width. */}
@@ -433,6 +462,14 @@ export default function App() {
                 open={loginOpen}
                 onClose={() => setLoginOpen(false)}
                 onToken={setToken}
+            />
+
+            <PresetsDrawer
+                open={presetsOpen}
+                onClose={() => setPresetsOpen(false)}
+                token={token}
+                current={preset}
+                onCurrent={setPreset}
             />
 
             <HistoryDrawer

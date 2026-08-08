@@ -79,6 +79,24 @@ export function SettingsProvider({ children }) {
     );
 }
 
+/**
+ * The whole console as one plain object, and the way back. This is what a preset
+ * is: everything the sheet holds, nothing else.
+ */
+export function useSettingsIO() {
+    const ctx = useContext(SettingsContext);
+    if (!ctx) throw new Error("useSettingsIO must be used inside SettingsProvider");
+    return {
+        snapshot: () =>
+            Object.fromEntries(Object.entries(ctx).map(([key, [value]]) => [key, value])),
+        // Keys this build doesn't know are skipped rather than thrown on, so a
+        // preset saved by a newer or older version still loads what it can.
+        apply: (saved) => {
+            for (const [key, value] of Object.entries(saved ?? {})) ctx[key]?.[1](value);
+        },
+    };
+}
+
 /** `const [steps, setSteps] = useSetting("steps")` */
 export function useSetting(key) {
     const ctx = useContext(SettingsContext);
