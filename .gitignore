@@ -12,4 +12,12 @@ frontend/dist/
 # build_dict.py, build_subset.py and build_characters.py over the danbooru
 # dump, and they get deployed as static assets rather than shipped in the repo.
 data/
-frontend/public/
+frontend/public/*
+# ...except the character profiles: 540 KB, and the browser must get exactly the
+# columns this build's parser expects, so it ships with the site rather than
+# from the data host.
+!frontend/public/characters.csv.gz
+
+# The reference pictures pick_picture.py chose: ~28k webp, ~20 KB each. They
+# are deployed to the data host beside the index, not carried in the repo.
+character_dict/**/*.webp
