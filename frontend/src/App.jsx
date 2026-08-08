@@ -1,6 +1,7 @@
 import { History, Infinity as InfinityIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import BottomSheet from "./components/BottomSheet.jsx";
+import CharactersTab from "./components/CharactersTab.jsx";
 import HistoryDrawer from "./components/HistoryDrawer.jsx";
 import LoginSheet from "./components/LoginSheet.jsx";
 import SettingsSheet from "./components/SettingsSheet.jsx";
@@ -56,7 +57,48 @@ function AnlasIcon() {
     );
 }
 
+/** The two screens. Both stay mounted — switching is a `hidden`, never an
+    unmount, so a half-typed prompt, a running loop and the character list's
+    scroll position all survive the trip. */
+function TabBar({ tab, onTab }) {
+    return (
+        <div
+            className="fixed left-1/2 z-50 -translate-x-1/2"
+            style={{ top: "calc(0.75rem + env(safe-area-inset-top))" }}
+        >
+            <div
+                role="tablist"
+                className="flex gap-1 rounded-full border border-hair bg-[#33333a]/60 p-1
+                           backdrop-blur-2xl
+                           shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14)]"
+            >
+                {[
+                    ["generate", "Generate"],
+                    ["characters", "Characters"],
+                ].map(([id, label]) => (
+                    <button
+                        key={id}
+                        type="button"
+                        role="tab"
+                        aria-selected={tab === id}
+                        onClick={() => onTab(id)}
+                        className={`rounded-full px-3.5 py-1 text-[12.5px] font-medium
+                                    transition-colors ${
+                                        tab === id
+                                            ? "bg-white/16 text-fg shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)]"
+                                            : "text-dim"
+                                    }`}
+                    >
+                        {label}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 export default function App() {
+    const [tab, setTab] = useState("generate");
     const [sheetOpen, setSheetOpen] = useState(false);
     const [historyOpen, setHistoryOpen] = useState(false);
     const [shots, setShots] = useState([]);
@@ -140,6 +182,8 @@ export default function App() {
         const prompt = await buildPrompt({
             beginning,
             ending,
+            negative,
+            characters,
             post,
             reorder: extras.reorder,
             reformat: extras.reformat,
@@ -241,6 +285,8 @@ export default function App() {
 
     return (
         <div className="relative h-svh w-full overflow-hidden bg-well">
+            <TabBar tab={tab} onTab={setTab} />
+
             {/* Anlas balance. Hidden until logged in, since there is no number to
                 show and the corner is better left empty than filled with a dash. */}
             {anlas === null ? null : (
@@ -257,6 +303,9 @@ export default function App() {
                 </div>
             )}
 
+            {/* Hidden, not unmounted: a loop started here keeps running while the
+                character list is open, and comes back exactly as it was. */}
+            <div className={tab === "generate" ? "contents" : "hidden"}>
             {/* Stage. The progress image wins while one is running — that is the
                 whole point of streaming — and the last finished image otherwise. */}
             {/* md:pl clears the sidebar, which is always open at that width. */}
@@ -365,9 +414,20 @@ export default function App() {
                 </div>
             </div>
 
+            {/* Inside the wrapper: settings belong to generating, so the sidebar
+                and the sheet's grabber go away with the rest of it and the
+                character grid gets the whole width. */}
             <BottomSheet open={sheetOpen} onOpenChange={setSheetOpen}>
                 <SettingsSheet />
             </BottomSheet>
+            </div>
+
+            <div className={tab === "characters" ? "contents" : "hidden"}>
+                <CharactersTab
+                    active={tab === "characters"}
+                    onGenerate={() => setTab("generate")}
+                />
+            </div>
 
             <LoginSheet
                 open={loginOpen}

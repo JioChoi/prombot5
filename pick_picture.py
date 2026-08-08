@@ -29,6 +29,7 @@ import concurrent.futures as futures
 import csv
 import io
 import os
+import re
 import threading
 import time
 
@@ -161,6 +162,7 @@ local = threading.local()
 
 
 THUMB = (448, 672)  # a two-column phone grid at 2x, and no bigger
+WEBP_MAX = 16383    # the format's largest encodable dimension
 
 
 def save_webp(body, thumb_out, full_out):
@@ -177,6 +179,11 @@ def save_webp(body, thumb_out, full_out):
     with Image.open(io.BytesIO(body)) as im:
         im.seek(0)  # frame 0 of an animation, a no-op for a still
         im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+        # danbooru carries the odd 20000px banner, and webp cannot encode past
+        # 16383 in either direction — the "full size" copy is as full as the
+        # format allows
+        if max(im.size) > WEBP_MAX:
+            im.thumbnail((WEBP_MAX, WEBP_MAX), Image.LANCZOS)
         im.save(full_out, "WEBP", quality=80)
         im.thumbnail(THUMB, Image.LANCZOS)
         im.save(thumb_out, "WEBP", quality=75, method=6)
@@ -207,9 +214,60 @@ def fetch(url, out, full_out):
             time.sleep(3 * (attempt + 1))
 
 
+def filename(character):
+    """The tag as a filename. The client repeats these rewrites to build the URL
+    — see portrait() in frontend/src/lib/characters.js — so the two must agree
+    exactly. All three exist because the store serving these files reads a path
+    the way a URL parser would:
+
+      /  a directory              lancelot_(fate/zero)
+      :  a scheme, so `i:p_masquerena.webp` is not a relative path at all.
+         Only a leading one is ambiguous, but rewriting every colon is one rule
+         instead of two and costs nothing — no name collides either way.
+      .. path traversal. `c.c.` + `.webp` is `c.c..webp`, refused outright.
+    """
+    stem = character.replace("/", "_").replace(":", "_")
+    return re.sub(r"\.{2,}", ".", stem + ".webp")
+
+
+def repo_path(character):
+    """Where the picture goes on the data host, initial-first.
+
+    A git repo holds at most 10000 files per directory and there are 17.9k
+    pictures, so they are bucketed by first character — 34 directories, the
+    largest about 2k. The client rebuilds this path to make the image URL; see
+    portrait() in frontend/src/lib/characters.js.
+
+    Locally the files stay flat: nothing here has a per-directory limit, and a
+    flat directory is what check.html and the pick scripts scan.
+    """
+    f = filename(character)
+    return f"{f[0].lower() if f[0].isalnum() else '_'}/{f}"
+
+
+def stage_for_upload(stage, *dirs):
+    """Hard-link the flat picture directories into the sharded layout to upload.
+
+        python pick_picture.py --stage ~/.cache/prombot-upload/character-images
+        hf upload Jio7/prombot ~/.cache/prombot-upload/character-images character-images
+
+    One `hf upload` and not `upload-large-folder`: the latter commits in batches
+    of ~50, which spends the whole 128-commits-per-hour budget in three minutes
+    and then spins on 429s. One commit for the whole folder is the fast path.
+    """
+    n = 0
+    for d in dirs:
+        for f in os.listdir(d):
+            dst = os.path.join(stage, f[0].lower() if f[0].isalnum() else "_", f)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if not os.path.exists(dst):
+                os.link(os.path.join(d, f), dst)
+                n += 1
+    return n
+
+
 def path_for(outdir, character):
-    # a handful of names carry a slash, e.g. lancelot_(fate/zero)
-    return os.path.join(outdir, character.replace("/", "_") + ".webp")
+    return os.path.join(outdir, filename(character))
 
 
 def read_picks(path):
@@ -290,7 +348,17 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--stage", default=STAGE, help="cached eligible posts")
     ap.add_argument("--restage", action="store_true", help="rebuild the cache")
+    ap.add_argument("--stage-upload", metavar="DIR",
+                    help="hard-link the pictures into the sharded layout the "
+                         "data host needs, then exit")
     args = ap.parse_args()
+
+    # Nothing to rank — this only rearranges pictures that already exist.
+    if args.stage_upload:
+        n = stage_for_upload(args.stage_upload, args.out, args.out + "_missing")
+        print(f"{n} linked into {args.stage_upload}")
+        return
+
     if not args.character and not args.all:
         ap.error("name a character, or --all")
 

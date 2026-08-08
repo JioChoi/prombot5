@@ -19,7 +19,11 @@ const POSTINGS_URL = `${DATA}/postings.bin`;
 const PROMPTS_URL = `${DATA}/prompts.bin`;
 const OFFSETS_URL = `${DATA}/prompts.idx`;
 const GROUPS_URL = `${DATA}/tag-groups.csv.gz`;
-const PROFILES_URL = `${DATA}/characters.csv.gz`;
+/* The one data file small enough to travel with the site (540 KB), and the one
+   that has to move in lockstep with the code that reads it — the column list
+   has changed once already. Same-origin, so a stale copy on the data host can
+   never shift its fields out from under this. */
+const PROFILES_URL = "/characters.csv.gz";
 // danbooru category ids; the client only cares which tags are artists
 export const ARTIST = 1;
 
@@ -119,14 +123,22 @@ function loadGroups() {
    only the switches that fill a prompt in ever ask for it. */
 function loadProfiles() {
     loadingProfiles ??= text(PROFILES_URL).then((csv) => {
-        for (const line of csv.split("\n").slice(1)) {
+        const lines = csv.split("\n");
+        // character,series,features,attire[,posts] — the count was added later,
+        // and this file is served from the data host, not from the build, so a
+        // client can meet a copy that predates it. Read the header rather than
+        // assume: guessing per row would silently shift every field by one.
+        const tail = lines[0].endsWith(",posts") ? 4 : 3;
+        for (const line of lines.slice(1)) {
             if (!line) continue;
-            // character,series,features,attire — traits are space-separated
+            // Split from the right — a character name may contain a comma, the
+            // trailing fields never do. Traits are space-separated.
             const f = line.split(",");
-            profiles.set(f.slice(0, -3).join(","), {
-                series: f.at(-3),
-                features: f.at(-2) ? f.at(-2).split(" ") : [],
-                attire: f.at(-1) ? f.at(-1).split(" ") : [],
+            profiles.set(f.slice(0, -tail).join(","), {
+                series: f.at(-tail),
+                features: f.at(1 - tail) ? f.at(1 - tail).split(" ") : [],
+                attire: f.at(2 - tail) ? f.at(2 - tail).split(" ") : [],
+                posts: tail === 4 ? +f.at(-1) : 0,
             });
         }
     });
@@ -137,6 +149,13 @@ function loadProfiles() {
 export async function profileOf(character) {
     await loadProfiles();
     return profiles.get(character);
+}
+
+/** Every profile, keyed by character. The same Map the lookups above read, so
+    browsing the whole list costs nothing beyond the one download. */
+export async function allProfiles() {
+    await loadProfiles();
+    return profiles;
 }
 
 /** Body text of a .gz the server may or may not have already un-gzipped. */

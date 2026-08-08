@@ -21,4 +21,22 @@ const byName = await buildPrompt({
 });
 assert.ok(!byName.includes("questionable"), byName);
 
+// Nothing the negative prompt rules out survives the draw, weights and all.
+const censored = { tags: ["1girl", "mosaic_censoring", "blue_eyes"], cats: [0, 0, 0] };
+const vetoed = await buildPrompt({ ...base, post: censored, negative: "{blue eyes:1.2}" });
+assert.ok(!vetoed.includes("blue_eyes"), vetoed);
+assert.ok(vetoed.includes("mosaic_censoring"), vetoed);
+
+// `uncensored` anywhere — pinned text or a character caption — takes the whole
+// censor list out of the draw.
+for (const asked of [
+    { beginning: "uncensored" },
+    { ending: "1girl, uncensored" },
+    { characters: [{ text: "hatsune miku, uncensored" }] },
+]) {
+    const out = await buildPrompt({ ...base, post: censored, ...asked });
+    assert.ok(!out.includes("mosaic_censoring"), out);
+    assert.ok(out.includes("1girl"), out);
+}
+
 console.log("ok");

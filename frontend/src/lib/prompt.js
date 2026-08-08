@@ -26,6 +26,29 @@ const QUALITY = new Set([
     "lowres", "very awa", "incredibly absurdres",
 ]);
 
+/* Every danbooru tag that means "something is covering it up". Drawn tags are
+   whatever the source post wore, so a prompt that asks for `uncensored` can
+   still come back with `mosaic_censoring` from the draw — these come out when
+   it does. Copied from censor.dat; small and static, so it travels with the
+   code rather than costing a fetch. */
+const CENSOR = new Set([
+    "censored", "bar_censor", "blank_censor", "blur_censor", "glitch_censor",
+    "heart_censor", "light_censor", "mosaic_censoring", "novelty_censor",
+    "character_censor", "censored_by_text", "flower_censor", "interface_censor",
+    "emoji_censor", "convenient_censoring", "hair_censor", "tail_censor",
+    "out-of-frame_censoring", "pointless_censoring", "censored_with_cum",
+    "ribbon_censor", "steam_censor", "censored_nipples", "identity_censor",
+    "soap_censor", "censored_text", "transparent_censoring", "scribble_censor",
+    "star_censor", "censored_food", "fake_censor", "censored_gesture",
+    "wing_censor", "censored_anus", "censored_violence", "tape_censor",
+    "water_censor", "petal_censor", "censored_feet", "removable_censorship",
+    "leaf_censor", "censored_testicles", "censored_profanity",
+    "speech_bubble_censor", "sparkle_censor", "patreon_logo_censor",
+    "feather_censor", "necklace_censor", "shadow_censor", "censored_urethra",
+    "inconsistent_censoring", "censored_clitoris", "blood_censor",
+    "treasure_mark_censor",
+]);
+
 /** Rank of each bucket in the finished prompt. */
 const ORDER = { count: 0, character: 1, copyright: 2, artist: 3, other: 4, meta: 5 };
 
@@ -122,7 +145,7 @@ async function fillIn(entries, opts) {
     const added = [];
 
     const push = (tag, cat) => {
-        if (present.has(tag)) return;
+        if (present.has(tag) || opts.banned.has(tag)) return;
         present.add(tag);
         added.push({ tag, weight: 0, cat });
     };
@@ -149,10 +172,16 @@ async function fillIn(entries, opts) {
  * user already pinned are dropped from the draw, since the pinned copy is the
  * one carrying their weight. Reordering is the only step that needs to know a
  * typed tag's category, so it is the only one that goes looking for it.
+ *
+ * `negative` and the character captions never reach the output; they are read
+ * for what they rule out — anything in the negative prompt, and the censor
+ * tags when anyone asked for `uncensored`.
  */
 export async function buildPrompt({
     beginning,
     ending,
+    negative = "",
+    characters = [],
     post,
     reorder,
     reformat,
@@ -164,6 +193,15 @@ export async function buildPrompt({
     const head = parsePrompt(beginning);
     const tail = parsePrompt(ending);
     const pinned = new Set([...head, ...tail].map((e) => keyOf(e.tag)));
+
+    // What a drawn tag is not allowed to be. Asking for a tag and asking
+    // against it is the same contradiction whether it came from the negative
+    // prompt or from `uncensored` — the drawn copy loses either way.
+    const banned = new Set(parsePrompt(negative).map((e) => keyOf(e.tag)));
+    const asked = [head, tail, ...characters.map((c) => parsePrompt(c.text ?? ""))];
+    if (asked.some((es) => es.some((e) => keyOf(e.tag) === "uncensored"))) {
+        for (const t of CENSOR) banned.add(t);
+    }
 
     // Meta is bookkeeping — `commentary_request`, `bad_id`, `absurdres` say
     // something about the upload, not about the picture.
@@ -177,7 +215,8 @@ export async function buildPrompt({
             (e) =>
                 e.cat !== META &&
                 !(dropRating && isRating(e)) &&
-                !pinned.has(keyOf(e.tag)),
+                !pinned.has(keyOf(e.tag)) &&
+                !banned.has(keyOf(e.tag)),
         );
 
     let entries = [...head, ...drawn, ...tail];
@@ -188,6 +227,7 @@ export async function buildPrompt({
                 autoCopyright,
                 strengthenCharacteristic,
                 strengthenAttire,
+                banned,
             }),
         );
     }

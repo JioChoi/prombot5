@@ -151,11 +151,13 @@ def write(con, out, gz):
         w.writerow(["character", "posts", "series", "features", "attire"])
         w.writerows((n, p, s, f or "", a or "") for n, p, s, f, a in rows)
 
-    # the client only needs the lookup, not the counts
+    # The count rides along last so the client can rank a character list by it;
+    # last, because the reader splits from the right and a character name may
+    # contain a comma.
     with gzip.open(gz, "wt", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh, lineterminator="\n")
-        w.writerow(["character", "series", "features", "attire"])
-        w.writerows((n, s, f or "", a or "") for n, _, s, f, a in rows)
+        w.writerow(["character", "series", "features", "attire", "posts"])
+        w.writerows((n, s, f or "", a or "", p) for n, p, s, f, a in rows)
 
     print(f"{len(rows)} characters -> {out}, {gz} "
           f"({os.path.getsize(gz) / 1e3:.0f} KB)")
