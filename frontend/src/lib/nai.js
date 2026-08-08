@@ -72,6 +72,11 @@ async function* frames(stream) {
  * `signal` aborts the request; the caller owns every Blob it is handed.
  */
 export async function generate(token, body, { onPreview, signal } = {}) {
+    // Counted where the request is made, so retries and aborts count too — this
+    // is "generations asked for", not "images that came back". globalThis, not
+    // window: the node tests import this file with no DOM.
+    globalThis.gtag?.("event", "generate", { model: body?.model });
+
     const r = await call("/api/generate-image-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
