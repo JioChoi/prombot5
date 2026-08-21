@@ -136,6 +136,22 @@ function bucket(tag, cat) {
 }
 
 /**
+ * What no tag is allowed to be — whether it was drawn or filled in.
+ *
+ * Asking for a tag and asking against it is the same contradiction wherever
+ * the request came from, and `uncensored` anywhere — pinned text or a
+ * character's own caption — rules out the whole censor list.
+ */
+function bans({ negative = "", beginning = "", ending = "", characters = [] }) {
+    const banned = new Set(parsePrompt(negative).map((e) => keyOf(e.tag)));
+    const asked = [beginning, ending, ...characters.map((c) => c.text ?? "")];
+    if (asked.some((t) => parsePrompt(t).some((e) => keyOf(e.tag) === "uncensored"))) {
+        for (const t of CENSOR) banned.add(t);
+    }
+    return banned;
+}
+
+/**
  * What a named character brings with them: their series, and the traits they
  * wear in most of their pictures. Nothing already in the prompt is repeated,
  * and a character with no profile contributes nothing.
@@ -175,11 +191,12 @@ async function fillIn(entries, opts) {
  *
  * `negative` and the character captions never reach the output; they are read
  * for what they rule out — anything in the negative prompt, and the censor
- * tags when anyone asked for `uncensored`.
+ * tags when anyone asked for `uncensored`. Filling *them* in is a separate
+ * job, since they leave the app as their own fields: see fillCharacters.
  */
 export async function buildPrompt({
-    beginning,
-    ending,
+    beginning = "",
+    ending = "",
     negative = "",
     characters = [],
     post,
@@ -194,14 +211,7 @@ export async function buildPrompt({
     const tail = parsePrompt(ending);
     const pinned = new Set([...head, ...tail].map((e) => keyOf(e.tag)));
 
-    // What a drawn tag is not allowed to be. Asking for a tag and asking
-    // against it is the same contradiction whether it came from the negative
-    // prompt or from `uncensored` — the drawn copy loses either way.
-    const banned = new Set(parsePrompt(negative).map((e) => keyOf(e.tag)));
-    const asked = [head, tail, ...characters.map((c) => parsePrompt(c.text ?? ""))];
-    if (asked.some((es) => es.some((e) => keyOf(e.tag) === "uncensored"))) {
-        for (const t of CENSOR) banned.add(t);
-    }
+    const banned = bans({ negative, beginning, ending, characters });
 
     // Meta is bookkeeping — `commentary_request`, `bad_id`, `absurdres` say
     // something about the upload, not about the picture.
@@ -256,6 +266,36 @@ export async function buildPrompt({
                     : spaced(tag);
             }
             return { tag, weight: e.weight };
+        }),
+    );
+}
+
+/**
+ * The cast, each caption filled in from whoever it names.
+ *
+ * The base prompt is filled in by buildPrompt above, but a character's own
+ * caption is a second place a name can appear — and for a multi-character
+ * image it is the *only* place, since that is where NovelAI reads who is who.
+ * A caption naming Sakuya gets her maid headdress in her own caption, not in
+ * the base one, or every character in the picture would end up wearing it.
+ *
+ * Captions are appended to rather than re-rendered: what someone typed is
+ * theirs, down to the spacing. Returns the same objects when nothing is added,
+ * so positions and ids ride through untouched.
+ */
+export async function fillCharacters(characters, opts) {
+    if (!opts.autoCopyright && !opts.strengthenCharacteristic && !opts.strengthenAttire) {
+        return characters;
+    }
+    const banned = bans({ ...opts, characters });
+    return Promise.all(
+        characters.map(async (c) => {
+            const text = c.text ?? "";
+            const added = await fillIn(parsePrompt(text), { ...opts, banned });
+            if (!added.length) return c;
+            const tags = added.map((e) => (opts.reformat ? spaced(e.tag) : e.tag));
+            const head = text.trim().replace(/,+$/, "").trim();
+            return { ...c, text: head ? `${head}, ${tags.join(", ")}` : tags.join(", ") };
         }),
     );
 }

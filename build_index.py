@@ -22,6 +22,9 @@ Output (all in frontend/public/):
                 not stored per post — a tag id already carries its category
                 via prompt-tags.csv.gz, so the client regroups for free.
   prompts.idx   uint32 LE, N+1 entries: byte offset of each record.
+  prompts.anc.gz  every 64th of those offsets, gap-varint: small enough for the
+                client to hold, which turns a record read into one request
+                instead of an idx lookup followed by a read. build_anchors.py.
   prompts.json  row count and the fav_count -> prefix-length table.
 
 Ratings ride along as pseudo-tags (rating:general, ...) in category 9, so a
@@ -37,6 +40,7 @@ import time
 import duckdb
 import numpy as np
 
+import build_anchors
 import build_dict
 
 REPO = "hf://datasets/nick007x/Danbooru-2026-parquet-metadata/*.parquet"
@@ -316,6 +320,9 @@ def main():
     prompt_bytes = write_prompts(
         con, f"{args.out}/prompts.bin", f"{args.out}/prompts.idx", n_posts)
     step(f"prompts.bin {prompt_bytes / 1e6:.0f} MB")
+
+    n_anc, anc_bytes = build_anchors.build(args.out)
+    step(f"prompts.anc.gz {n_anc:,} anchors, {anc_bytes / 1e3:.0f} KB")
 
     write_tags(con, args.dict_src, off, length)
     build_dict.build(args.out, args.dict_src)

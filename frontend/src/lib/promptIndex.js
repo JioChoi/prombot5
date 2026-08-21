@@ -18,6 +18,7 @@ const META_URL = `${DATA}/prompts.json`;
 const POSTINGS_URL = `${DATA}/postings.bin`;
 const PROMPTS_URL = `${DATA}/prompts.bin`;
 const OFFSETS_URL = `${DATA}/prompts.idx`;
+const ANCHORS_URL = `${DATA}/prompts.anc.gz`;
 const GROUPS_URL = `${DATA}/tag-groups.csv.gz`;
 /* The one data file small enough to travel with the site (540 KB), and the one
    that has to move in lockstep with the code that reads it — the column list
@@ -58,7 +59,50 @@ function loadMeta() {
  * prompts.bin are a gigabyte between them, and a run touches a sliver.
  */
 export function warmPromptIndex() {
-    return Promise.all([loadMeta(), loadDict(), loadGroups(), loadProfiles()]);
+    return Promise.all([loadMeta(), loadDict(), loadGroups(), loadProfiles(), loadAnchors()]);
+}
+
+/* Where every 64th record starts in prompts.bin, from build_anchors.py.
+
+   The full table is prompts.idx, 42 MB, which has to stay on the server — so
+   reading a record meant asking it where the record was and only then asking
+   for the record. Two round trips, strictly in series, and on a phone that
+   chain *is* the wait before a prompt appears.
+
+   Every 64th offset is 260 KB, which can be held. A post's block brackets it
+   in prompts.bin, so one request covers it and `window` walks forward inside
+   the block — about 3.5 KB of records, decoded in microseconds. */
+const STRIDE = 64; // must match build_anchors.py
+let loadingAnchors = null;
+let anchors = null;
+
+function loadAnchors() {
+    loadingAnchors ??= (async () => {
+        const res = await fetch(ANCHORS_URL);
+        if (!res.ok) throw new Error(`anchors: ${res.status}`);
+        const bytes = await gunzip(await tracked(res));
+        // gap varints, ascending — the same encoding the postings use
+        const out = [];
+        let at = 0;
+        let v = 0;
+        while (at < bytes.length) {
+            let gap;
+            [gap, at] = varint(bytes, at);
+            out.push((v += gap));
+        }
+        anchors = Uint32Array.from(out);
+    })()
+        // A data host without the file is not a broken app: `window` falls back
+        // to the two-request path, which is what every client did before this.
+        .catch(() => {});
+    return loadingAnchors;
+}
+
+/** Un-gzip, unless the server already did it for us. */
+async function gunzip(bytes) {
+    if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
+    const blob = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(blob).arrayBuffer());
 }
 
 /* How far the warm-up has got, in bytes, so the app can show a bar for it.
@@ -522,6 +566,7 @@ function varint(bytes, at) {
 async function range(url, from, to) {
     const res = await fetch(url, { headers: { Range: `bytes=${from}-${to}` } });
     const bytes = new Uint8Array(await res.arrayBuffer());
+    drawStep();
     // A server that ignored the Range header sent the whole file.
     return res.status === 206 ? bytes : bytes.subarray(from, to + 1);
 }
@@ -541,7 +586,9 @@ function decodeRecord(bytes, at, post) {
         [gap, at] = varint(bytes, at);
         ids.add((tagId += gap));
     }
-    return { post, id, fav, ids };
+    // `end` is where the next record starts, which is what lets a block be
+    // walked without asking prompts.idx where each record begins.
+    return { post, id, fav, ids, end: at };
 }
 
 /**
@@ -550,6 +597,7 @@ function decodeRecord(bytes, at, post) {
  * a run of records that is itself contiguous in prompts.bin.
  */
 async function window(from, n) {
+    if (anchors) return block(from, n);
     const ends = await range(OFFSETS_URL, from * 4, (from + n) * 4 + 3);
     const view = new DataView(ends.buffer, ends.byteOffset, ends.byteLength);
     const start = view.getUint32(0, true);
@@ -558,6 +606,31 @@ async function window(from, n) {
     const out = [];
     for (let i = 0; i < n; i++) {
         out.push(decodeRecord(bytes, view.getUint32(i * 4, true) - start, from + i));
+    }
+    return out;
+}
+
+/**
+ * The same window in one request, using the held anchor table.
+ *
+ * The blocks holding the run are fetched whole and walked from their first
+ * record — up to 63 records of preamble, ~1.7 KB on average, against a round
+ * trip saved. Records are self-delimiting, so walking needs no offsets.
+ */
+async function block(from, n) {
+    const first = Math.floor(from / STRIDE);
+    const last = Math.floor((from + n - 1) / STRIDE);
+    const start = anchors[first];
+    // The final anchor is the end of the file, so a run touching the last block
+    // has nothing past it to bracket with.
+    const end = anchors[Math.min(last + 1, anchors.length - 1)];
+    const bytes = await range(PROMPTS_URL, start, end - 1);
+    const out = [];
+    let at = 0;
+    for (let post = first * STRIDE; post < from + n; post++) {
+        const rec = decodeRecord(bytes, at, post);
+        at = rec.end;
+        if (post >= from) out.push(rec);
     }
     return out;
 }
@@ -699,8 +772,47 @@ async function sample(query, limit, inc, exc) {
     return undefined;
 }
 
+/* How a draw is getting on, for the bar the app shows while it runs.
+
+   A draw is a chain of range requests whose length is not known up front: a
+   selective query misses and probes again, so there is no total to divide by.
+   Each finished request closes a fixed share of whatever is left, which moves
+   steadily, never stalls and never claims to be done before it is.
+
+   ponytail: asymptotic, not a measurement. An exact bar needs the record
+   offsets in the posting lists, which is a reindex of a 575 MB file. */
+let drawWatcher = null;
+let drawing = false;
+let drawSteps = 0;
+
+export function onDrawProgress(fn) {
+    drawWatcher = fn;
+}
+
+function drawStep() {
+    if (drawing) drawWatcher?.(1 - 0.7 ** ++drawSteps);
+}
+
 /** A random matching post, or null when nothing matches. */
 export async function randomPrompt(query) {
+    // Nested draws would fight over the bar; the outer one owns it.
+    const own = !drawing;
+    if (own) {
+        drawing = true;
+        drawSteps = 0;
+        drawWatcher?.(0);
+    }
+    try {
+        return await draw(query);
+    } finally {
+        if (own) {
+            drawing = false;
+            drawWatcher?.(1);
+        }
+    }
+}
+
+async function draw(query) {
     await loadMeta();
     const include = query.include ?? [];
     const exclude = query.exclude ?? [];

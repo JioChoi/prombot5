@@ -114,8 +114,10 @@ const PROCESSING = [
     ["reformat", "Reformat tags", "Normalize spacing, underscores, and escapes"],
     ["dropRating", "Remove rating tags", "Drop rating: tags from the generated tags only"],
     ["autoCopyright", "Add source series", "Include the series when a character is named"],
-    ["strengthenCharacteristic", "Emphasize features", "Weight body and feature tags up"],
-    ["strengthenAttire", "Emphasize attire", "Weight clothing tags up"],
+    ["strengthenCharacteristic", "Add character features",
+     "Fill in the hair and body tags a named character usually has"],
+    ["strengthenAttire", "Add character attire",
+     "Fill in the clothes a named character usually wears"],
 ];
 
 const TABS = [

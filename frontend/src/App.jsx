@@ -10,8 +10,14 @@ import usePersistentState from "./hooks/usePersistentState.js";
 import { keepAwake, releaseAwake } from "./lib/keepAwake.js";
 import { REJECTED, generate, verifyToken } from "./lib/nai.js";
 import { buildRequest } from "./lib/naiRequest.js";
-import { buildPrompt } from "./lib/prompt.js";
-import { buildQuery, onWarmProgress, randomPrompt, warmPromptIndex } from "./lib/promptIndex.js";
+import { buildPrompt, fillCharacters } from "./lib/prompt.js";
+import {
+    buildQuery,
+    onDrawProgress,
+    onWarmProgress,
+    randomPrompt,
+    warmPromptIndex,
+} from "./lib/promptIndex.js";
 import { useSetting } from "./state/settings.jsx";
 
 const ANLAS = "rgb(245, 243, 194)";
@@ -121,6 +127,10 @@ export default function App() {
     // Fraction of the prompt index downloaded, 1 once there is nothing to wait
     // for. A few megabytes on a slow connection is a long silence otherwise.
     const [warm, setWarm] = useState(0);
+    // The same for a draw in flight: picking a post is a chain of range
+    // requests, and on a phone that is seconds of nothing happening.
+    const [drawn, setDrawn] = useState(1);
+    const [onDraw, setOnDraw] = useState(false);
     // Whether the finished prompt is laid over the image on the stage.
     const [showPrompt, setShowPrompt] = useState(false);
     // The loop is started once and runs across many renders, so reading the
@@ -136,6 +146,7 @@ export default function App() {
     // something actually needs it, and there is nothing to say here yet.
     useEffect(() => {
         onWarmProgress(setWarm);
+        onDrawProgress(setDrawn);
         // Whether it worked or not the bar has nothing left to say.
         warmPromptIndex().then(
             () => setWarm(1),
@@ -185,13 +196,43 @@ export default function App() {
 
     const active = shots.find((h) => h.id === activeId) ?? shots[0];
 
+    /* The draw for the *next* image, started while the current one is still
+       being painted. A draw is several round trips and an image is fifteen
+       seconds, so overlapping them hides the wait completely in a loop, and
+       makes the second press of Generate instant. Keyed by the query it was
+       drawn for: change a filter and the held post is no longer an answer to
+       the question being asked. */
+    const ahead = useRef(null);
+
+    function nextPost(query) {
+        const key = JSON.stringify(query);
+        const held = ahead.current;
+        ahead.current = null;
+        // Failures are not cached — a dropped prefetch should cost a retry,
+        // not the whole run.
+        return held?.key === key ? held.post.then((p) => p ?? randomPrompt(query)) : randomPrompt(query);
+    }
+
+    function prefetch(query) {
+        const key = JSON.stringify(query);
+        if (ahead.current?.key === key) return;
+        ahead.current = { key, post: randomPrompt(query).catch(() => null) };
+    }
+
     /** One image, start to finish. Throws so the loop below can stop on failure. */
     async function once() {
         // With the draw switched off the prompt is only the pinned text, so no
         // post is fetched and nothing can fail to match.
-        const post = randomize
-            ? await randomPrompt(buildQuery({ include, exclude, minScore, filters }))
-            : { tags: [], cats: [] };
+        const query = randomize ? buildQuery({ include, exclude, minScore, filters }) : null;
+        let post;
+        try {
+            // Only a draw someone is waiting on gets the bar; a prefetch runs
+            // behind an image nobody is watching a progress bar for.
+            setOnDraw(true);
+            post = query ? await nextPost(query) : { tags: [], cats: [] };
+        } finally {
+            setOnDraw(false);
+        }
         if (!post) throw new Error("No prompt matches these filters");
 
         const prompt = await buildPrompt({
@@ -200,19 +241,30 @@ export default function App() {
             negative,
             characters,
             post,
-            reorder: extras.reorder,
-            reformat: extras.reformat,
-            dropRating: extras.dropRating,
+            ...extras,
+        });
+
+        // The cast is filled in separately: a name in a character's own caption
+        // is where NovelAI reads who that character is, and what they bring
+        // belongs in that caption rather than in the base prompt.
+        const cast = await fillCharacters(characters, {
+            beginning,
+            ending,
+            negative,
+            ...extras,
         });
 
         const { body } = buildRequest({
             prompt,
             settings: {
-                model, negative, characters, useCoords,
+                model, negative, characters: cast, useCoords,
                 width, height, steps, guidance, rescale, sampler, noiseSchedule, seed,
                 varietyPlus,
             },
         });
+
+        // The request is away; the next draw rides along beside it.
+        if (query) prefetch(query);
 
         const blob = await generate(token, body, {
             // Each progress image replaces the last, and the one it replaces is
@@ -300,18 +352,20 @@ export default function App() {
 
     return (
         <div className="relative h-svh w-full overflow-hidden bg-well">
-            {/* Prompt index download. A hairline across the very top edge —
-                above the notch, since it is status, not something to press. */}
-            {warm < 1 ? (
+            {/* Prompt index download, then the draw that waits on it. A hairline
+                across the very top edge — above the notch, since it is status,
+                not something to press. One bar, because the two never overlap:
+                nothing can be drawn until the index is down. */}
+            {warm < 1 || (onDraw && drawn < 1) ? (
                 <div
                     role="progressbar"
-                    aria-label="Downloading prompt data"
-                    aria-valuenow={Math.round(warm * 100)}
+                    aria-label={warm < 1 ? "Downloading prompt data" : "Drawing a prompt"}
+                    aria-valuenow={Math.round((warm < 1 ? warm : drawn) * 100)}
                     className="fixed inset-x-0 top-0 z-[60] h-[3px] bg-white/10"
                 >
                     <div
                         className="h-full bg-accent-lit transition-[width] duration-200"
-                        style={{ width: `${warm * 100}%` }}
+                        style={{ width: `${(warm < 1 ? warm : drawn) * 100}%` }}
                     />
                 </div>
             ) : null}
