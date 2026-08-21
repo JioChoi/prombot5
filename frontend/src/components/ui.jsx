@@ -28,9 +28,18 @@ export function Group({ label, hint, action, children, bare = false, className =
 
 /** Rows inside a panel, divided by hairlines. */
 export function Rows({ children }) {
-    // Clips pressed-row backgrounds to the panel's corners. 17px is the panel's
-    // 18px radius less its 1px border.
-    return <div className="overflow-hidden rounded-[17px] [&>*]:hair-top">{children}</div>;
+    // The end rows carry the corners themselves rather than the panel clipping
+    // them: a row holding a textarea also holds its autocomplete popup, and
+    // overflow-hidden here cut the popup off at the panel's edge. 17px is the
+    // panel's 18px radius less its 1px border.
+    return (
+        <div
+            className="rounded-[17px] [&>*]:hair-top [&>*:first-child]:rounded-t-[17px]
+                       [&>*:last-child]:rounded-b-[17px]"
+        >
+            {children}
+        </div>
+    );
 }
 
 export function TextArea({

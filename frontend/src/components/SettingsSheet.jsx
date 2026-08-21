@@ -162,36 +162,35 @@ export default function SettingsSheet() {
     const allowed = FILTERS.filter(([k]) => !filters[k]).length;
     const skipped = characters.filter((c) => c.off).length;
 
-    // How many posts the generator has to draw from. The index is only fetched
-    // once the tab is open, and only after typing settles.
-    const [matches, setMatches] = useState("Counting matching prompts…");
-    const [counting, setCounting] = useState(true);
-    useEffect(() => {
-        if (tab !== "generator") return;
-        let live = true;
+    // How many posts the generator has to draw from. Counting reads posting
+    // lists over the network, so it happens when asked for rather than after
+    // every keystroke — on a slow connection the automatic version made the
+    // whole tab feel stuck.
+    const [matches, setMatches] = useState("");
+    const [counting, setCounting] = useState(false);
+    // A settings change makes the number on screen a lie, so it goes away.
+    useEffect(() => setMatches(""), [include, exclude, minScore, filters]);
+
+    function count() {
+        if (counting) return;
         setCounting(true);
-        const timer = setTimeout(() => {
-            const query = buildQuery({ include, exclude, minScore, filters });
-            // One call, one answer: exact when the posting lists are small
-            // enough to read, sampled when they are not. Asking for both and
-            // racing them left a band of queries where neither replied and the
-            // previous number stayed on screen.
-            promptCount(query).then(
+        const query = buildQuery({ include, exclude, minScore, filters });
+        // One call, one answer: exact when the posting lists are small enough
+        // to read, sampled when they are not. Asking for both and racing them
+        // left a band of queries where neither replied and the previous number
+        // stayed on screen.
+        promptCount(query)
+            .then(
                 ({ n, exact }) =>
-                    live &&
                     setMatches(
                         exact
                             ? `${n.toLocaleString()} prompts available`
                             : `about ${n.toLocaleString()} prompts`,
                     ),
-                () => live && setMatches("Prompt index unavailable"),
-            ).finally(() => live && setCounting(false));
-        }, 300);
-        return () => {
-            live = false;
-            clearTimeout(timer);
-        };
-    }, [tab, include, exclude, minScore, filters]);
+                () => setMatches("Prompt index unavailable"),
+            )
+            .finally(() => setCounting(false));
+    }
 
     // Order is meaningful — NovelAI reads the cast in the order it is sent — so
     // swapping neighbours is the whole operation.
@@ -521,18 +520,32 @@ export default function SettingsSheet() {
                             </Rows>
                         </Group>
 
-                        <p className="-mt-2 flex items-center gap-1.5 px-0.5 text-[11.5px] leading-snug text-dim">
-                            {counting && (
-                                <Loader2
-                                    aria-hidden
-                                    strokeWidth={2}
-                                    className="h-3 w-3 shrink-0 animate-spin"
-                                />
-                            )}
-                            {/* the previous count stays put while a new one runs,
-                                so the row doesn't flicker between keystrokes */}
-                            <span aria-live="polite" aria-busy={counting}>{matches}</span>
-                        </p>
+                        <div className="-mt-2 flex items-center gap-2 px-0.5">
+                            <button
+                                type="button"
+                                onClick={count}
+                                disabled={counting}
+                                className="flex shrink-0 items-center gap-1.5 rounded-full border border-hair
+                                           bg-panel px-3 py-1 text-[11.5px] text-mut transition-colors
+                                           active:text-fg disabled:opacity-50"
+                            >
+                                {counting && (
+                                    <Loader2
+                                        aria-hidden
+                                        strokeWidth={2}
+                                        className="h-3 w-3 shrink-0 animate-spin"
+                                    />
+                                )}
+                                Count prompts
+                            </button>
+                            <span
+                                aria-live="polite"
+                                aria-busy={counting}
+                                className="min-w-0 flex-1 text-[11.5px] leading-snug text-dim"
+                            >
+                                {matches}
+                            </span>
+                        </div>
 
                         <Group label="Tag Types To Use" hint={`${allowed} of ${FILTERS.length}`} bare>
                             <div className="flex flex-wrap gap-1.5">

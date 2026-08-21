@@ -41,7 +41,8 @@ const profiles = new Map(); // character -> { series, features, attire }
 /** 19 KB: the totals and the fav_count ladder. Enough to count with no tags. */
 function loadMeta() {
     loadingMeta ??= fetch(META_URL)
-        .then((r) => r.json())
+        .then(tracked)
+        .then((b) => JSON.parse(new TextDecoder().decode(b)))
         .then((m) => {
             meta = m;
         });
@@ -58,6 +59,46 @@ function loadMeta() {
  */
 export function warmPromptIndex() {
     return Promise.all([loadMeta(), loadDict(), loadGroups(), loadProfiles()]);
+}
+
+/* How far the warm-up has got, in bytes, so the app can show a bar for it.
+   One subscriber, because there is one bar. Both numbers grow as responses
+   arrive — a file whose headers have not landed yet is not in `total` — so the
+   fraction is a lower bound on how much is left, never an exact one. */
+const loaded = { done: 0, total: 0 };
+let watcher = null;
+
+export function onWarmProgress(fn) {
+    watcher = fn;
+}
+
+/** Body bytes of a response, counting them into `loaded` as they arrive. */
+async function tracked(res) {
+    // Content-Length is the compressed length when the server applied its own
+    // encoding, while the reader hands back decompressed bytes — the ratio can
+    // run past 1, so the display clamps. These files are pre-gzipped and served
+    // as-is, so in practice the two agree.
+    const len = +res.headers.get("content-length");
+    if (!len || !res.body) return new Uint8Array(await res.arrayBuffer());
+    loaded.total += len;
+    const reader = res.body.getReader();
+    const chunks = [];
+    let n = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        n += value.length;
+        loaded.done += value.length;
+        watcher?.(Math.min(1, loaded.done / loaded.total));
+    }
+    const out = new Uint8Array(n);
+    let at = 0;
+    for (const c of chunks) {
+        out.set(c, at);
+        at += c.length;
+    }
+    return out;
 }
 
 /* 2 MB gzipped: every tag used 50 times or more, which is 109k of the 928k in
@@ -160,7 +201,7 @@ export async function allProfiles() {
 
 /** Body text of a .gz the server may or may not have already un-gzipped. */
 async function text(url) {
-    const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    const buf = await tracked(await fetch(url));
     return buf[0] === 0x1f && buf[1] === 0x8b
         ? new Response(
               new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip")),

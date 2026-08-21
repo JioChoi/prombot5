@@ -11,7 +11,7 @@ import { keepAwake, releaseAwake } from "./lib/keepAwake.js";
 import { REJECTED, generate, verifyToken } from "./lib/nai.js";
 import { buildRequest } from "./lib/naiRequest.js";
 import { buildPrompt } from "./lib/prompt.js";
-import { buildQuery, randomPrompt, warmPromptIndex } from "./lib/promptIndex.js";
+import { buildQuery, onWarmProgress, randomPrompt, warmPromptIndex } from "./lib/promptIndex.js";
 import { useSetting } from "./state/settings.jsx";
 
 const ANLAS = "rgb(245, 243, 194)";
@@ -118,6 +118,11 @@ export default function App() {
     const [busy, setBusy] = useState(false);
     const [waitLeft, setWaitLeft] = useState(null);
     const [error, setError] = useState("");
+    // Fraction of the prompt index downloaded, 1 once there is nothing to wait
+    // for. A few megabytes on a slow connection is a long silence otherwise.
+    const [warm, setWarm] = useState(0);
+    // Whether the finished prompt is laid over the image on the stage.
+    const [showPrompt, setShowPrompt] = useState(false);
     // The loop is started once and runs across many renders, so reading the
     // state directly would give it whatever `autoGen` was when it started.
     // Switching back to single has to reach a loop that is already going.
@@ -130,7 +135,12 @@ export default function App() {
     // page was idle. Failures are ignored on purpose: each loader retries when
     // something actually needs it, and there is nothing to say here yet.
     useEffect(() => {
-        warmPromptIndex().catch(() => {});
+        onWarmProgress(setWarm);
+        // Whether it worked or not the bar has nothing left to say.
+        warmPromptIndex().then(
+            () => setWarm(1),
+            () => setWarm(1),
+        );
     }, []);
 
     // A stored key can be revoked or expire between visits. Check it once on load so
@@ -290,6 +300,22 @@ export default function App() {
 
     return (
         <div className="relative h-svh w-full overflow-hidden bg-well">
+            {/* Prompt index download. A hairline across the very top edge —
+                above the notch, since it is status, not something to press. */}
+            {warm < 1 ? (
+                <div
+                    role="progressbar"
+                    aria-label="Downloading prompt data"
+                    aria-valuenow={Math.round(warm * 100)}
+                    className="fixed inset-x-0 top-0 z-[60] h-[3px] bg-white/10"
+                >
+                    <div
+                        className="h-full bg-accent-lit transition-[width] duration-200"
+                        style={{ width: `${warm * 100}%` }}
+                    />
+                </div>
+            ) : null}
+
             <TabBar tab={tab} onTab={setTab} />
 
             {/* Anlas balance. Hidden until logged in, since there is no number to
@@ -343,12 +369,33 @@ export default function App() {
                            px-2 pb-24 pt-3 md:pl-[var(--sidebar)]"
             >
                 {preview || active ? (
-                    <img
-                        src={preview ?? active.src}
-                        alt={active?.title ?? "Generating"}
-                        className="max-h-[70svh] w-auto max-w-full object-contain
-                                   shadow-[0_1px_0_0_rgb(255_255_255/0.16),0_30px_70px_-24px_rgb(0_0_0/0.7)]"
-                    />
+                    /* Tap to read what was actually sent, tap again to go back
+                       to the picture. The scrim is the image's own box, not the
+                       screen, so the prompt reads as belonging to it. */
+                    <button
+                        type="button"
+                        onClick={() => setShowPrompt((v) => !v)}
+                        aria-pressed={showPrompt}
+                        aria-label={showPrompt ? "Hide prompt" : "Show prompt"}
+                        className="relative max-h-[70svh] w-auto max-w-full"
+                    >
+                        <img
+                            src={preview ?? active.src}
+                            alt={active?.title ?? "Generating"}
+                            className="max-h-[70svh] w-auto max-w-full object-contain
+                                       shadow-[0_1px_0_0_rgb(255_255_255/0.16),0_30px_70px_-24px_rgb(0_0_0/0.7)]"
+                        />
+                        {showPrompt && active?.title ? (
+                            <div
+                                className="scroll-thin absolute inset-0 overflow-y-auto overscroll-contain
+                                           bg-black/75 p-4 text-left backdrop-blur-[2px]"
+                            >
+                                <p className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-white">
+                                    {active.title}
+                                </p>
+                            </div>
+                        ) : null}
+                    </button>
                 ) : (
                     <p className="max-w-[22rem] text-center text-[13px] leading-relaxed text-dim">
                         {busy
