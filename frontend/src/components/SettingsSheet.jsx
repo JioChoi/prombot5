@@ -78,6 +78,8 @@ const SAMPLER_GROUPS = [
 const MODEL_GROUPS = [
     {
         options: [
+            { value: "nai-diffusion-5-full", label: "NAI Diffusion V5 Full" },
+            { value: "nai-diffusion-5-curated", label: "NAI Diffusion V5 Curated" },
             { value: "nai-diffusion-4-5-full", label: "NAI Diffusion V4.5 Full" },
             { value: "nai-diffusion-4-5-curated", label: "NAI Diffusion V4.5 Curated" },
         ],

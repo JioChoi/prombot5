@@ -56,7 +56,7 @@ export function SettingsProvider({ children }) {
         filters: usePersistentState("filters", FILTERS_OFF),
         extras: usePersistentState("extras", EXTRAS),
 
-        model: usePersistentState("model", "nai-diffusion-4-5-full"),
+        model: usePersistentState("model", "nai-diffusion-5-full"),
         size: usePersistentState("size", "832x1216"),
         width: usePersistentState("width", 832),
         height: usePersistentState("height", 1216),
