@@ -1,0 +1,7 @@
+data/
+character_dict/
+tags/
+nohup.out
+proxy/
+build_*.py
+pick_*.py

@@ -160,6 +160,7 @@ export default function SettingsSheet() {
 
     const [delay, setDelay] = useSetting("delay");
     const [autoDownload, setAutoDownload] = useSetting("autoDownload");
+    const [background, setBackground] = useSetting("background");
 
     const allowed = FILTERS.filter(([k]) => !filters[k]).length;
     const skipped = characters.filter((c) => c.off).length;
@@ -738,6 +739,18 @@ export default function SettingsSheet() {
                             How long to wait after an image finishes before starting the next one. Switch the dock
                             counter to ∞ to start repeating.
                         </p>
+
+                        <Group label="Background">
+                            <Rows>
+                                <SwitchRow
+                                    active={background}
+                                    note="Plays a silent tone so a run keeps going when you leave the app. Turn off to stop the audio."
+                                    onClick={() => setBackground((v) => !v)}
+                                >
+                                    Enable background generation
+                                </SwitchRow>
+                            </Rows>
+                        </Group>
 
                         <Group label="Results">
                             <Rows>

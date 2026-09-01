@@ -7,6 +7,7 @@ import {
     portrait,
     searchCharacters,
     searchSeries,
+    switchCharacter,
     withTags,
 } from "./characters.js";
 
@@ -110,5 +111,62 @@ assert.deepEqual(
 
 // Copying with tags puts the readable name first, then its traits.
 assert.equal(withTags(idx.list[2]), "hakurei reimu, hair bow");
+
+// Switching recasts the first slot: the name goes, the traits and the slot's
+// own fields stay, and later slots are untouched.
+const charNames = new Set(idx.list.map((c) => c.name));
+const cast = [
+    { id: 1, text: "hakurei reimu, smile, hair bow", negative: "blurry", x: 2, y: 3 },
+    { id: 2, text: "kagamine rin", negative: "" },
+];
+const switched = switchCharacter(cast, "hatsune miku", charNames);
+assert.deepEqual(switched[0], {
+    id: 1,
+    text: "hatsune miku, smile, hair bow",
+    negative: "blurry",
+    x: 2,
+    y: 3,
+});
+assert.equal(switched[1], cast[1]);
+assert.equal(cast[0].text, "hakurei reimu, smile, hair bow");
+
+// The character need not lead, and its brackets belong to the slot, not to it.
+assert.equal(
+    switchCharacter([{ text: "smile, [[kirisame marisa]], witch hat" }], "hatsune miku", charNames)[0]
+        .text,
+    "smile, [[hatsune miku]], witch hat",
+);
+
+// A slot naming nobody gets the name put in front rather than losing its traits.
+assert.equal(
+    switchCharacter([{ text: "smile, witch hat" }], "hatsune miku", charNames)[0].text,
+    "hatsune miku, smile, witch hat",
+);
+
+// Everyone in the slot goes, not only the first: a two-hander must not keep
+// its second character after being switched to somebody else.
+assert.equal(
+    switchCharacter(
+        [{ text: "hakurei reimu, smile, kirisame marisa, witch hat" }],
+        "hatsune miku",
+        charNames,
+    )[0].text,
+    "hatsune miku, smile, witch hat",
+);
+
+// The parentheses in a disambiguated name are part of it, not emphasis round it,
+// so it has to be recognised as the character in the slot like any other name.
+const disambiguated = new Set([...charNames, "leaf_(pokemon)"]);
+assert.equal(
+    switchCharacter([{ text: "leaf (pokemon), smile" }], "hatsune miku", disambiguated)[0].text,
+    "hatsune miku, smile",
+);
+assert.equal(
+    switchCharacter([{ text: "[[leaf (pokemon)]], smile" }], "hatsune miku", disambiguated)[0].text,
+    "[[hatsune miku]], smile",
+);
+
+// Nothing to switch: the caller creates a slot instead.
+assert.equal(switchCharacter([], "hatsune miku", charNames), null);
 
 console.log("ok");

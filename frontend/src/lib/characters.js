@@ -9,6 +9,7 @@
    ponytail: linear scan, swap in tagIndex's blob scan if the list ever grows
    past ~100k characters. */
 
+import { keyOf, parsePrompt, renderPrompt } from "./prompt.js";
 import { allProfiles } from "./promptIndex.js";
 
 /** Characters whose series has no one else in it are collected here rather than
@@ -174,4 +175,31 @@ export function searchSeries(index, q) {
 /** What "copy name with tags" puts on the clipboard. */
 export function withTags(c) {
     return [c.label, ...c.features, ...c.attire].join(", ");
+}
+
+/**
+ * Swap whoever the first character slot names for `label`.
+ *
+ * A character slot is a prompt like `hakurei reimu, smile, hair bow`: one
+ * character tag and the traits around it. Switching keeps the traits and takes
+ * the people out — *every* known character name in the slot, not only the first,
+ * or switching a two-hander would quietly leave the second person in. The new
+ * name lands where the first one stood, wearing that tag's brackets, since the
+ * weight belonged to the slot and not to whoever was in it. A slot naming nobody
+ * gets the name put in front, and no slots at all means there is nothing to
+ * switch: the caller creates one.
+ *
+ * `names` is the set of underscore-form character names, i.e. `index.list`
+ * mapped by `name`.
+ */
+export function switchCharacter(characters, label, names) {
+    const [first, ...rest] = characters;
+    if (!first) return null;
+
+    const entries = parsePrompt(first.text);
+    const at = entries.findIndex((e) => names.has(keyOf(e.tag)));
+    const kept = entries.filter((e) => !names.has(keyOf(e.tag)));
+    kept.splice(at < 0 ? 0 : at, 0, { tag: label, weight: at < 0 ? 0 : entries[at].weight });
+
+    return [{ ...first, text: renderPrompt(kept) }, ...rest];
 }

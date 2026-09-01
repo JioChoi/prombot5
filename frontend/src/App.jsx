@@ -193,6 +193,7 @@ export default function App() {
 
     const [delay] = useSetting("delay");
     const [autoDownload] = useSetting("autoDownload");
+    const [background] = useSetting("background");
 
     const active = shots.find((h) => h.id === activeId) ?? shots[0];
 
@@ -317,7 +318,7 @@ export default function App() {
         setBusy(true);
         setError("");
         // From the press, so the audio counts as gesture-initiated.
-        keepAwake();
+        keepAwake({ audible: background });
         try {
             for (;;) {
                 try {

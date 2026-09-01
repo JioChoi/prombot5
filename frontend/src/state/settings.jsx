@@ -71,6 +71,9 @@ export function SettingsProvider({ children }) {
         noiseSchedule: usePersistentState("noiseSchedule", "karras"),
 
         delay: usePersistentState("delay", 3),
+        // On: hold an audio session so the run survives the phone going to
+        // the background. Off: the near-silent tone never plays.
+        background: usePersistentState("background", true),
         autoDownload: usePersistentState("autoDownload", false),
     };
 

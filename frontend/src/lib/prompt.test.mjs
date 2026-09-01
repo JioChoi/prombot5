@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildPrompt } from "./prompt.js";
+import { buildPrompt, keyOf } from "./prompt.js";
 
 const post = { tags: ["1girl", "rating:general", "blue_eyes", "commentary"], cats: [0, 9, 0, 5] };
 const base = { beginning: "rating:explicit, masterpiece", ending: "rating:safe", post, reorder: false, reformat: false };
@@ -38,5 +38,13 @@ for (const asked of [
     assert.ok(!out.includes("mosaic_censoring"), out);
     assert.ok(out.includes("1girl"), out);
 }
+
+// A tag's own parentheses are part of its name — only a bracket the tag opens
+// with is emphasis, and it takes its own closer off with it.
+assert.equal(keyOf("leaf (pokemon)"), "leaf_(pokemon)");
+assert.equal(keyOf("[[leaf (pokemon)]]"), "leaf_(pokemon)");
+assert.equal(keyOf("(leaf (pokemon):1.3)"), "leaf_(pokemon)");
+assert.equal(keyOf("(Blue Eyes:1.3)"), "blue_eyes");
+assert.equal(keyOf("blue_eyes"), "blue_eyes");
 
 console.log("ok");

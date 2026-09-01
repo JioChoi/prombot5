@@ -26,22 +26,43 @@ from huggingface_hub import hf_hub_download
 REPO = "kierarkia/danbooru-wiki-2026"
 DUMP = "danbooru_wiki_dataset_2026-04-28.jsonl"
 GROUPS_OUT = "frontend/public/tag-groups.csv.gz"
+# subsets split out later live here; the four originals stay in data/
+GROUPS = "data/groups"
+# every general tag no subset claimed — the LLM's to-do list
+UNGROUPED = "data/groups/ungrouped.csv"
 # Seeds come from the sections of the [[tag_groups]] index. Following links
 # instead of using a fixed list walks the whole tag_group graph (attire -> hair
 # -> body parts -> ...), which drags `solo` and `blush` into everything.
 # danbooru's clothing-state convention: `<garment>_lift`, `<garment>_pull`, ...
+# `holding_hat` is a pose tag that happens to name a garment, not a garment
+ACTIONS = ("holding_", "removing_", "grabbing_", "adjusting_", "pulling_",
+           "wearing_", "undressing_", "putting_on_", "taking_off_")
 STATES = ("lift", "pull", "aside", "tug", "down", "up", "removed",
           "grab", "hold", "only", "set", "peek", "overhang", "tucked_in",
           "on_shoulders", "around_waist", "partially_removed")
 SETS = {
+    # Worn but not clothing: jewelry, glasses, piercings, hair ornaments. Same
+    # compound sweep as attire, so `hair_ornament` buys `star_hair_ornament`.
+    "accessory": {
+        "dir": GROUPS,
+        "seeds": ["accessories", "eyewear", "glasses", "piercings",
+                  "embellishment", "prints"],
+        # the accessories page links every hat and glove too. Rule: if the wiki
+        # files it under a *wear page, it is clothing and attire keeps it.
+        "not_seeds": ["headwear", "handwear", "legwear", "covering",
+                      "sleeves"],
+        "states": STATES,
+    },
     # "Attire and body accessories", minus makeup / fashion_style / nudity —
     # those describe a face or a lack of clothes. `jobs` rides along because a
     # job tag is a costume: `maid`, `nun`, `police`.
     "attire": {
-        "seeds": ["attire", "accessories", "dress", "handwear", "headwear",
+        "dir": GROUPS,
+        "seeds": ["attire", "dress", "handwear", "headwear",
                   "legwear", "neck_and_neckwear", "sexual_attire", "bra",
-                  "panties", "sleeves", "embellishment", "eyewear", "covering",
-                  "jobs"],
+                  "panties", "sleeves", "covering", "jobs"],
+        # accessory is built first and wins the tags both pages link
+        "minus": ["accessory"],
         # `X_(cosplay)` is a costume tag whatever character X is
         "endswith": ("_(cosplay)",),
         "states": STATES,
@@ -86,16 +107,80 @@ SETS = {
         "seeds": ["face_tags", "gestures"],
         "minus": ["attire"],
     },
+    # ---- groups below live in data/groups/, one label each ----
+    # A garment being moved is an action, not a garment: `skirt_lift`,
+    # `adjusting_hat`. No wiki page lists these — the convention *is* the rule,
+    # so it is built off attire.csv by suffix/prefix instead of a crawl.
+    "clothes_action": {
+        "dir": GROUPS,
+        "from": ["attire", "accessory"],
+        "states": STATES,
+        "actions": ACTIONS,
+    },
+    # `posture` is how the body is held; `verbs_and_gerunds` is what it does.
+    "pose": {
+        "dir": GROUPS,
+        "seeds": ["posture", "verbs_and_gerunds", "dances", "holding_tags"],
+        "minus": ["attire", "clothes_action"],
+        "expand": False,
+    },
+    # where the picture happens, indoors/outdoors/weather/scenery
+    "scene": {
+        "dir": GROUPS,
+        "seeds": ["backgrounds", "locations", "real_world_locations",
+                  "doors_and_gates", "water", "fire"],
+        "minus": ["attire", "feature"],
+        "expand": False,
+    },
+    # camera and canvas: angle, crop, focus, how many people are in frame
+    "composition": {
+        "dir": GROUPS,
+        "seeds": ["image_composition", "focus_tags", "character_count",
+                  "groups", "lighting"],
+        "expand": False,
+    },
+    # how it was drawn, not what is drawn
+    "style": {
+        "dir": GROUPS,
+        "seeds": ["visual_aesthetic", "artistic_license", "drawing_software",
+                  "fine_art_parody", "theme", "meme"],
+        "minus": ["attire", "feature"],
+        "expand": False,
+    },
+    # props and scenery objects — held things land in pose too, that is fine
+    "object": {
+        "dir": GROUPS,
+        "seeds": ["food_tags", "technology", "cards", "board_games", "flowers",
+                  "birds", "cats", "dogs", "sports"],
+        "minus": ["attire", "feature", "scene"],
+        "expand": False,
+    },
+    # not a picture of anything: watermarks, years, translations, resolution
+    "meta": {
+        "dir": GROUPS,
+        "seeds": ["metatags", "year_tags", "text", "language", "phrases",
+                  "symbols", "audio_tags", "companies_and_brand_names"],
+        "minus": ["attire", "feature", "expression"],
+        "expand": False,
+    },
 }
 # [[tag]], [[tag|display]], [[tag#anchor]] — take the target only
 LINK = re.compile(r"\[\[([^\]|#]+)")
 # wiki namespaces that are prose, not tags
 SKIP = ("category:", "howto:", "help:", "about:", "api:", "list_of")
-# `holding_hat` is a pose tag that happens to name a garment, not a garment
-ACTIONS = ("holding_", "removing_", "grabbing_", "adjusting_", "pulling_",
-           "wearing_", "undressing_", "putting_on_", "taking_off_")
 # `single_thighhigh` is one of a matched plural, `male_swimwear` a variant of it
 MODIFIERS = ("single_", "multiple_", "male_", "female_")
+
+
+def sdir(name):
+    """Directory holding data/<name>.csv and its include/exclude lists."""
+    return SETS[name].get("dir", "data")
+
+
+def read_subset(name):
+    import csv as _csv
+    with open(f"{sdir(name)}/{name}.csv", encoding="utf-8") as fh:
+        return {r["tag"] for r in _csv.DictReader(fh)}
 
 
 def norm(link):
@@ -168,37 +253,69 @@ def expand(matched, tags, state_words):
                              modified(t))}
 
 
+def derive(conf, known):
+    """Tags built from other subsets by the naming convention alone:
+    `<garment>_lift` and `adjusting_<garment>`, off data/attire.csv."""
+    base = set().union(*(read_subset(n) for n in conf["from"]))
+    states = {t + "_" + s for t in base for s in conf.get("states", ())}
+    actions = {a + t for t in base for a in conf.get("actions", ())}
+    return known & (states | actions)
+
+
+# `minus` reads another subset's csv, so the dependency order is fixed
+ORDER = ["accessory", "attire", "feature", "expression", "nsfw", "clothes_action", "pose",
+         "scene", "object", "composition", "style", "meta"]
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("name", choices=sorted(SETS))
+    ap.add_argument("name", choices=sorted(SETS) + ["all"])
     ap.add_argument("--tags", default="data/tags.csv")
     ap.add_argument("--out", help="default data/<name>.csv")
     ap.add_argument("--include", help="default data/<name>_include.txt")
     ap.add_argument("--exclude", help="default data/<name>_exclude.txt")
-    ap.add_argument("--rest", help="general tags left out, for eyeballing what "
-                                   "was missed; default data/not_<name>.csv")
     ap.add_argument("--no-expand", action="store_true")
     args = ap.parse_args()
 
-    conf = SETS[args.name]
-    args.out = args.out or f"data/{args.name}.csv"
-    args.include = args.include or f"data/{args.name}_include.txt"
-    args.exclude = args.exclude or f"data/{args.name}_exclude.txt"
-    args.rest = args.rest or f"data/not_{args.name}.csv"
+    if args.name == "all":
+        for name in ORDER:
+            print(f"== {name}")
+            build(argparse.Namespace(**{**vars(args), "name": name}))
+        return
+    build(args)
 
-    pages = crawl(load_wiki(), conf["seeds"])
-    wiki = {t for tags in pages.values() for t in tags}
-    print(f"{len(pages)} wiki pages, {len(wiki)} tag links")
+
+def build(args):
+    conf = SETS[args.name]
+    d = sdir(args.name)
+    os.makedirs(d, exist_ok=True)
+    args.out = args.out or f"{d}/{args.name}.csv"
+    args.include = args.include or f"{d}/{args.name}_include.txt"
+    args.exclude = args.exclude or f"{d}/{args.name}_exclude.txt"
 
     tags = load_tags(args.tags)
     known = {t for t, _, cat in tags if cat == 0}
-    keep = wiki & known
-    print(f"{len(keep)} of {len(wiki)} exist as general tags")
+
+    if conf.get("from"):
+        keep = derive(conf, known)
+        print(f"{len(keep)} tags derived from {', '.join(conf['from'])}")
+    else:
+        pages = crawl(load_wiki(), conf["seeds"])
+        wiki = {t for tags_ in pages.values() for t in tags_}
+        print(f"{len(pages)} wiki pages, {len(wiki)} tag links")
+        keep = wiki & known
+        print(f"{len(keep)} of {len(wiki)} exist as general tags")
 
     # not intersected with `known`: `headwear` is no tag of its own but is the
     # head of `black_headwear`, and the final join drops it again
     included = read_list(args.include)
     keep |= included
+
+    if conf.get("not_seeds"):
+        clothes = {t for tags_ in crawl(load_wiki(), conf["not_seeds"]).values()
+                   for t in tags_}
+        print(f"-{len(keep & clothes)} filed under {'/'.join(conf['not_seeds'])}")
+        keep -= clothes
 
     if not args.no_expand and conf.get("expand", True):
         # `swimsuit` buys `one-piece_swimsuit`, which buys
@@ -217,24 +334,18 @@ def main():
         print(f"+{len(extra - keep)} tags ending {'/'.join(conf['endswith'])}")
         keep |= extra
 
-    drop = ACTIONS + conf.get("drop", ())
+    drop = conf.get("drop", ())
+    if not conf.get("actions"):
+        drop += ACTIONS
     keep = {t for t in keep if not t.startswith(drop)}
 
     dropped = read_list(args.exclude)
     print(f"-{len(dropped)} excluded")
     for other in conf.get("minus", ()):
-        overlap = {r["tag"] for r in csv.DictReader(open(f"data/{other}.csv"))}
+        overlap = read_subset(other)
         dropped |= overlap
         print(f"-{len(keep & overlap)} already in {other}.csv")
     keep -= dropped
-
-    if args.rest:
-        with open(args.rest, "w", newline="", encoding="utf-8") as fh:
-            w = csv.writer(fh, lineterminator="\n")
-            w.writerow(["tag", "count"])
-            w.writerows((t, c) for t, c, cat in tags
-                        if cat == 0 and t not in keep)
-        print(f"leftovers -> {args.rest}")
 
     rows = [r for r in tags if r[0] in keep]  # tags.csv is already count-desc
     with open(args.out, "w", newline="", encoding="utf-8") as fh:
@@ -242,18 +353,19 @@ def main():
         w.writerow(["tag", "count", "cat"])
         w.writerows(rows)
     print(f"{len(rows)} tags -> {args.out}")
-    write_groups()
+    write_groups(tags)
 
 
-def write_groups(out=GROUPS_OUT):
-    """tag,group for every subset built so far, gzipped for the browser.
+def write_groups(tags, out=GROUPS_OUT):
+    """tag,group for every subset built so far, gzipped for the browser, plus
+    data/groups/ungrouped.csv — the general tags no subset claimed.
 
     The client needs to know which group a tag belongs to before it can drop
     it, and prompt-tags.csv.gz can't say — rebuilding that means rerunning
     build_index.py over the whole dump."""
     labels = {}
     for name in sorted(SETS):
-        path = f"data/{name}.csv"
+        path = f"{sdir(name)}/{name}.csv"
         if not os.path.exists(path):
             continue
         with open(path, encoding="utf-8") as fh:
@@ -265,6 +377,13 @@ def write_groups(out=GROUPS_OUT):
         # space-separated: danbooru tags never contain a space
         w.writerows((t, " ".join(g)) for t, g in labels.items())
     print(f"{len(labels)} tags labelled -> {out}")
+
+    with open(UNGROUPED, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh, lineterminator="\n")
+        w.writerow(["tag", "count"])
+        rest = [(t, c) for t, c, cat in tags if cat == 0 and t not in labels]
+        w.writerows(rest)
+    print(f"{len(rest)} tags ungrouped -> {UNGROUPED}")
 
 
 def demo():

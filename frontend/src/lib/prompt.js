@@ -52,13 +52,24 @@ const CENSOR = new Set([
 /** Rank of each bucket in the finished prompt. */
 const ORDER = { count: 0, character: 1, copyright: 2, artist: 3, other: 4, meta: 5 };
 
+/** Which closer a bracket is looking for. */
+const CLOSER = { "(": ")", "[": "]", "{": "}" };
+
 /** What a typed tag is "really" saying, so `(Blue Eyes:1.3)` and `blue_eyes`
     count as the same tag. Weights, wrapping brackets and escapes come off. */
 export function keyOf(tag) {
-    return tag
+    let key = tag
         .replace(/^artist:/, "")
         .replace(/\\(.)/g, "$1")
-        .replace(/^[([{]+|[)\]}]+$/g, "")
+        .trim();
+
+    /* Emphasis comes off a pair at a time, and only where the tag actually
+       opens with a bracket. Taking a closer off the end on its own would eat
+       the disambiguator half of a name — `leaf (pokemon)` is who the character
+       is, not a bracket somebody put round `leaf`. */
+    while (key.length > 1 && CLOSER[key[0]] === key.at(-1)) key = key.slice(1, -1).trim();
+
+    return key
         .replace(/:\s*[\d.]+$/, "")
         .trim()
         .toLowerCase()

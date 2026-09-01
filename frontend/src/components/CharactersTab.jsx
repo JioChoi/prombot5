@@ -8,6 +8,7 @@ import {
     portrait,
     searchCharacters,
     searchSeries,
+    switchCharacter,
     withTags,
 } from "../lib/characters.js";
 import { freeCell } from "../lib/position.js";
@@ -118,7 +119,7 @@ function Tile({ image, title, note, count, fav, onFav, onOpen, favLabel }) {
 
 /** What clicking a character offers: the two clipboard forms and the one that
     puts them straight into the prompt. */
-function CharacterSheet({ character, onClose, onAppend }) {
+function CharacterSheet({ character, onClose, onAppend, onSwitch }) {
     const [done, setDone] = useState("");
     useEffect(() => {
         if (!done) return;
@@ -192,6 +193,7 @@ function CharacterSheet({ character, onClose, onAppend }) {
                         Copy name
                     </SheetAction>
                     <SheetAction onClick={() => copy(tags, "tags")}>Copy name with tags</SheetAction>
+                    <SheetAction onClick={onSwitch}>Switch character</SheetAction>
                     <SheetAction onClick={onAppend}>Append to characters</SheetAction>
                 </div>
 
@@ -253,6 +255,12 @@ export default function CharactersTab({ active, onGenerate }) {
     }, []);
 
     const favSet = useMemo(() => new Set(favorites), [favorites]);
+    /* Which tags name a character, so a slot's own traits can be told apart from
+       the person wearing them. 19k strings, built once the index lands. */
+    const charNames = useMemo(
+        () => new Set(index?.list.map((c) => c.name)),
+        [index],
+    );
     const searching = query.trim() !== "";
 
     /* One memo for what the grid shows, because every input to it — the query,
@@ -326,18 +334,26 @@ export default function CharactersTab({ active, onGenerate }) {
         setFavorites((f) => (f.includes(name) ? f.filter((x) => x !== name) : [...f, name]));
     }
 
+    const slot = (cs, label) => ({
+        id: Math.max(0, ...cs.map((x) => x.id)) + 1,
+        text: label,
+        negative: "",
+        ...freeCell(cs.filter((x) => x.x !== undefined && !x.off)),
+    });
+
     /* A new slot rather than an overwrite: "append" is how you build a cast,
        and the position picker needs a free cell like any other added character. */
     function append(c) {
-        setCharacters((cs) => [
-            ...cs,
-            {
-                id: Math.max(0, ...cs.map((x) => x.id)) + 1,
-                text: c.label,
-                negative: "",
-                ...freeCell(cs.filter((x) => x.x !== undefined && !x.off)),
-            },
-        ]);
+        setCharacters((cs) => [...cs, slot(cs, c.label)]);
+        setPicked(null);
+        onGenerate();
+    }
+
+    /* Recast the first slot: the traits, the position and the negative all stay
+       where they were, and only the name changes. With no cast at all there is
+       nobody to recast, so this is an append. */
+    function recast(c) {
+        setCharacters((cs) => switchCharacter(cs, c.label, charNames) ?? [slot(cs, c.label)]);
         setPicked(null);
         onGenerate();
     }
@@ -474,6 +490,7 @@ export default function CharactersTab({ active, onGenerate }) {
                     character={picked}
                     onClose={() => setPicked(null)}
                     onAppend={() => append(picked)}
+                    onSwitch={() => recast(picked)}
                 />
             ) : null}
         </div>

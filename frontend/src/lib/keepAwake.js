@@ -71,12 +71,14 @@ function onVisibility() {
     if (document.visibilityState === "visible") takeLock();
 }
 
-/** Call from a user gesture, or the audio will not be allowed to start. */
-export function keepAwake() {
+/** Call from a user gesture, or the audio will not be allowed to start.
+    `audible` off drops the audio session — the run then stops when the tab
+    goes to the background, and only the screen lock is held off. */
+export function keepAwake({ audible = true } = {}) {
     if (on) return;
     on = true;
 
-    if (!audio) {
+    if (audible && !audio) {
         audio = new Audio(silentWav());
         audio.loop = true;
         // Not muted: a muted element holds no audio session, which is the
@@ -84,7 +86,7 @@ export function keepAwake() {
         audio.volume = 0.001;
         audio.setAttribute("playsinline", "");
     }
-    audio.play().catch(() => {});
+    if (audible) audio.play().catch(() => {});
 
     if (navigator.wakeLock) {
         document.addEventListener("visibilitychange", onVisibility);
