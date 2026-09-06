@@ -7,8 +7,9 @@ import LoginSheet from "./components/LoginSheet.jsx";
 import PresetsDrawer from "./components/PresetsDrawer.jsx";
 import SettingsSheet from "./components/SettingsSheet.jsx";
 import usePersistentState from "./hooks/usePersistentState.js";
+import useSubscription from "./hooks/useSubscription.js";
 import { keepAwake, releaseAwake } from "./lib/keepAwake.js";
-import { REJECTED, generate, verifyToken } from "./lib/nai.js";
+import { generate } from "./lib/nai.js";
 import { buildRequest } from "./lib/naiRequest.js";
 import { buildPrompt, fillCharacters } from "./lib/prompt.js";
 import {
@@ -123,7 +124,7 @@ export default function App() {
     // drawer opens on the one you were working in, ready to overwrite.
     const [preset, setPreset] = usePersistentState("preset", "");
     const [token, setToken] = usePersistentState("naiToken", "");
-    const [anlas, setAnlas] = useState(null);
+    const { anlas, opus, refreshSubscription } = useSubscription(token, setToken);
     // The in-flight generation: its latest progress image, and how long is left
     // of the pause before the next one.
     const [preview, setPreview] = useState(null);
@@ -159,20 +160,6 @@ export default function App() {
             () => setWarm(1),
         );
     }, []);
-
-    // A stored key can be revoked or expire between visits. Check it once on load so
-    // that shows up as the login prompt rather than as a failed generation later.
-    // Only 401 clears it — a dead backend or dropped connection says nothing about
-    // whether the key is still good, and logging out over that would be wrong.
-    useEffect(() => {
-        if (!token) {
-            setAnlas(null);
-            return;
-        }
-        verifyToken(token).then(setAnlas, (e) => {
-            if (e.message === REJECTED) setToken("");
-        });
-    }, [token, setToken]);
 
     const [beginning] = useSetting("beginning");
     const [ending] = useSetting("ending");
@@ -285,6 +272,7 @@ export default function App() {
                 }),
         });
 
+        refreshSubscription();
         const at = new Date();
         const name = `nai_${stamp(at)}.png`;
         const src = URL.createObjectURL(blob);
@@ -360,8 +348,6 @@ export default function App() {
                 if (old) URL.revokeObjectURL(old);
                 return null;
             });
-            // Generation spends Anlas, so the badge is stale the moment one lands.
-            verifyToken(token).then(setAnlas, () => {});
         }
     }
 
@@ -391,15 +377,27 @@ export default function App() {
                 show and the corner is better left empty than filled with a dash. */}
             {anlas === null ? null : (
                 <div
-                    className="fixed right-3 z-30 flex items-center gap-1.5 rounded-full border border-hair
-                               bg-[#33333a]/60 px-2.5 py-1 backdrop-blur-2xl
-                               shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14)]"
-                    style={{ top: "calc(0.75rem + env(safe-area-inset-top))", color: ANLAS }}
+                    className="fixed right-3 z-30 flex flex-col items-end gap-1.5"
+                    style={{ top: "calc(0.75rem + env(safe-area-inset-top))" }}
                 >
-                    <AnlasIcon />
-                    <span className="num text-[12.5px] font-medium tabular-nums">
-                        {anlas.toLocaleString()}
-                    </span>
+                    <div
+                        className="flex items-center gap-1.5 rounded-full border border-hair
+                                   bg-[#33333a]/60 px-2.5 py-1 backdrop-blur-2xl
+                                   shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14)]"
+                        style={{ color: ANLAS }}
+                    >
+                        <AnlasIcon />
+                        <span className="num text-[12.5px] font-medium tabular-nums">
+                            {anlas.toLocaleString()}
+                        </span>
+                    </div>
+                    {opus === null ? null : (
+                        <div className="flex items-center gap-1.5 px-2 text-xs text-[#d4d4dc]"
+                             aria-label={`${opus}% of Opus Generations remaining`}>
+                            <span className="text-[11px] text-[#aaaab2]">Opus</span>
+                            <span className="num font-medium tabular-nums">{opus}%</span>
+                        </div>
+                    )}
                 </div>
             )}
 

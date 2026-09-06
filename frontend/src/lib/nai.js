@@ -23,16 +23,27 @@ export const REJECTED = "That key was rejected";
 
 /** Confirms a token works before we store it (so a typo fails here and not later in
     the middle of a generation) and again on load, in case it was revoked since.
-    Returns the Anlas balance, which the same response already carries. */
+    Returns the balances carried by the same subscription response. */
 export async function verifyToken(token) {
     const r = await call("/api/subscription", {
         headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
     });
     if (!r.ok) throw new Error(r.status === 401 ? REJECTED : `Check failed (${r.status})`);
     // Two separate pots — the subscription's monthly allowance and bought Anlas.
     // NovelAI's own UI shows the sum.
-    const left = (await r.json()).trainingStepsLeft ?? {};
-    return (left.fixedTrainingStepsLeft ?? 0) + (left.purchasedTrainingSteps ?? 0);
+    const subscription = await r.json();
+    const left = subscription.trainingStepsLeft ?? {};
+    const usage = subscription.usage;
+    const activeOpus = subscription.tier >= 3 && subscription.expiresAt > Date.now() / 1000;
+    return {
+        anlas: (left.fixedTrainingStepsLeft ?? 0) + (left.purchasedTrainingSteps ?? 0),
+        // Missing usage is unknown, not exhausted. The official banner permits
+        // values above 100 and clamps negative usage to zero.
+        opus: activeOpus && Number.isFinite(usage?.percent)
+            ? (usage.isNegative ? 0 : Math.max(0, usage.percent))
+            : null,
+    };
 }
 
 /* The stream is a run of frames, each a 4-byte big-endian length followed by
