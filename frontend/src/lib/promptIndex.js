@@ -446,6 +446,10 @@ async function select({ include = [], exclude = [], minScore = 0 }, upto = 0) {
  */
 export const COUNT_BUDGET = 1_200_000;
 
+function contradicts({ include = [], exclude = [] }) {
+    return include.some((tag) => exclude.includes(tag));
+}
+
 /**
  * A count from a slice of the corpus rather than all of it.
  *
@@ -461,6 +465,7 @@ export const COUNT_BUDGET = 1_200_000;
  * Returns null when the exact count was going to be cheap anyway.
  */
 export async function estimatePrompts(query, budget = COUNT_BUDGET) {
+    if (contradicts(query)) return 0;
     const { include = [], exclude = [], minScore = 0 } = query;
     // Only bow out where countPrompts answers for free, or nothing shows the
     // number at all: it returns null once the lists cost more than its budget,
@@ -503,6 +508,7 @@ export async function estimatePrompts(query, budget = COUNT_BUDGET) {
  * that is minutes for a number nobody waits on. The estimate above stands in.
  */
 export async function countPrompts(query, maxBytes = Infinity) {
+    if (contradicts(query)) return 0;
     // The dictionary already knows how many posts carry a tag. With no floor
     // and nothing to intersect, that number *is* the answer — no posting list.
     const { include = [], exclude = [], minScore = 0 } = query;
@@ -850,6 +856,9 @@ export async function randomPrompt(query) {
 }
 
 async function draw(query) {
+    // No post can both contain and not contain a tag. Sampling this case
+    // exhausts thousands of range requests before proving the same zero.
+    if (contradicts(query)) return null;
     await loadMeta();
     const include = query.include ?? [];
     const exclude = query.exclude ?? [];

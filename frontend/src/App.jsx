@@ -22,6 +22,12 @@ import { useSetting } from "./state/settings.jsx";
 
 const ANLAS = "rgb(245, 243, 194)";
 
+class NoMatchingPromptError extends Error {
+    constructor() {
+        super("No prompt matches these filters");
+    }
+}
+
 const clock = () =>
     new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -234,7 +240,7 @@ export default function App() {
         } finally {
             setOnDraw(false);
         }
-        if (!post) throw new Error("No prompt matches these filters");
+        if (!post) throw new NoMatchingPromptError();
 
         const prompt = await buildPrompt({
             beginning,
@@ -326,6 +332,12 @@ export default function App() {
                     setError("");
                 } catch (e) {
                     setError(e.message);
+                    // An empty pool needs new filters; retrying cannot recover
+                    // and otherwise leaves Generate disabled indefinitely.
+                    if (e instanceof NoMatchingPromptError) {
+                        setAutoGen(false);
+                        break;
+                    }
                     // One failed image should not end an unattended run — a
                     // dropped connection while the phone is asleep is the
                     // normal case, not a reason to stop for good.
