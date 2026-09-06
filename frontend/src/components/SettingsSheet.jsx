@@ -142,6 +142,7 @@ export default function SettingsSheet() {
     const [randomize, setRandomize] = useSetting("randomize");
     const [include, setInclude] = useSetting("include");
     const [exclude, setExclude] = useSetting("exclude");
+    const [omit, setOmit] = useSetting("omit");
     const [minScore, setMinScore] = useSetting("minScore");
     const [filters, setFilters] = useSetting("filters");
     const [extras, setExtras] = useSetting("extras");
@@ -509,6 +510,10 @@ export default function SettingsSheet() {
 
                         <Group label="Exclude Tags">
                             <TextArea rows={2} value={exclude} onChange={setExclude} placeholder="text, watermark" />
+                        </Group>
+
+                        <Group label="Omit Tags">
+                            <TextArea rows={2} value={omit} onChange={setOmit} placeholder="1girl" />
                         </Group>
 
                         <Group label="Minimum Favorites">

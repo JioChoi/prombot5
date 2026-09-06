@@ -211,6 +211,7 @@ export async function buildPrompt({
     negative = "",
     characters = [],
     post,
+    omit = "",
     reorder,
     reformat,
     dropRating,
@@ -223,6 +224,9 @@ export async function buildPrompt({
     const pinned = new Set([...head, ...tail].map((e) => keyOf(e.tag)));
 
     const banned = bans({ negative, beginning, ending, characters });
+    // Omit only filters the random post; pinned text and character fill-ins
+    // have their own meaning and must not inherit this output-only filter.
+    const omitted = new Set(parsePrompt(omit).map((e) => keyOf(e.tag)));
 
     // Meta is bookkeeping — `commentary_request`, `bad_id`, `absurdres` say
     // something about the upload, not about the picture.
@@ -237,6 +241,7 @@ export async function buildPrompt({
                 e.cat !== META &&
                 !(dropRating && isRating(e)) &&
                 !pinned.has(keyOf(e.tag)) &&
+                !omitted.has(keyOf(e.tag)) &&
                 !banned.has(keyOf(e.tag)),
         );
 
