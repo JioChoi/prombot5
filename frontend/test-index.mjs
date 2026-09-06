@@ -21,14 +21,14 @@ globalThis.fetch = async (url, opts) => {
     if (!m) {
         bytesRead += size;
         const body = readFileSync(path);
-        return { status: 200, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.length), json: async () => JSON.parse(body) };
+        return { status: 200, headers: new Headers({ "content-length": String(size) }), arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.length), json: async () => JSON.parse(body) };
     }
     const [from, to] = [+m[1], Math.min(+m[2], size - 1)];
     bytesRead += to - from + 1;
     const chunks = [];
     for await (const c of createReadStream(path, { start: from, end: to })) chunks.push(c);
     const body = Buffer.concat(chunks);
-    return { status: 206, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.length) };
+    return { status: 206, headers: new Headers({ "content-length": String(body.length) }), arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.length) };
 };
 
 const { countPrompts, randomPrompt, buildQuery } = await import("./src/lib/promptIndex.js");

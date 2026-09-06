@@ -21,3 +21,5 @@ frontend/public/*
 # The reference pictures pick_picture.py chose: ~28k webp, ~20 KB each. They
 # are deployed to the data host beside the index, not carried in the repo.
 character_dict/**/*.webp
+.vercel
+.env*

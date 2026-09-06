@@ -563,8 +563,45 @@ function varint(bytes, at) {
     return [v, at];
 }
 
+/* Hugging Face rate-limits /resolve/ — 3000 hits per 5 minutes per IP — and a
+   single draw is dozens of the range reads below, so a session earns a 429
+   before it earns a prompt. What /resolve/ answers with is a 302 to a signed
+   CDN URL that honours Range and sends `access-control-allow-origin: *`, and it
+   stays good for an hour. So pay the resolver once per file and range-read the
+   CDN after that: three resolver hits a session instead of hundreds.
+
+   The redirect is followed by fetch itself, which leaves the CDN URL in
+   `res.url`; a 1-byte probe is the cheapest way to ask for it. Anything that is
+   not a /resolve/ URL (dev, same-origin, the disk stub in test-index.mjs) is
+   already direct and skips all of this. */
+const resolved = new Map(); // /resolve/ url -> Promise<url to actually read>
+
+function direct(url) {
+    if (!url.includes("/resolve/")) return url;
+    let p = resolved.get(url);
+    if (!p) {
+        p = fetch(url, { headers: { Range: "bytes=0-0" } })
+            .then((res) => {
+                res.body?.cancel();
+                return res.url || url;
+            })
+            // A resolver that will not answer is not worth caching a failure
+            // for; fall back to the /resolve/ URL and let the read redirect.
+            .catch(() => url);
+        resolved.set(url, p);
+    }
+    return p;
+}
+
 async function range(url, from, to) {
-    const res = await fetch(url, { headers: { Range: `bytes=${from}-${to}` } });
+    const head = { Range: `bytes=${from}-${to}` };
+    let res = await fetch(await direct(url), { headers: head });
+    // The signature has an hour on it, and a tab can outlive that. 403 is how
+    // the CDN says so; re-resolve once and the next reads use the new URL.
+    if (res.status === 401 || res.status === 403) {
+        resolved.delete(url);
+        res = await fetch(await direct(url), { headers: head });
+    }
     const bytes = new Uint8Array(await res.arrayBuffer());
     drawStep();
     // A server that ignored the Range header sent the whole file.

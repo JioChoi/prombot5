@@ -5,3 +5,11 @@ nohup.out
 proxy/
 build_*.py
 pick_*.py
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+
+# The ~1.1 GB index: built into public/ for dev, served from Hugging Face in
+# production (VITE_DATA). Only the character profiles ship with the site.
+frontend/public/*
+!frontend/public/characters.csv.gz
