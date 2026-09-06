@@ -52,6 +52,7 @@ export function SettingsProvider({ children }) {
         randomize: usePersistentState("randomize", true),
         include: usePersistentState("include", "1girl, outdoors"),
         exclude: usePersistentState("exclude", "speech bubble"),
+        omit: usePersistentState("omit", ""),
         minScore: usePersistentState("minScore", 0),
         filters: usePersistentState("filters", FILTERS_OFF),
         extras: usePersistentState("extras", EXTRAS),

@@ -176,6 +176,7 @@ export default function App() {
     const [randomize] = useSetting("randomize");
     const [include] = useSetting("include");
     const [exclude] = useSetting("exclude");
+    const [omit] = useSetting("omit");
     const [minScore] = useSetting("minScore");
     const [filters] = useSetting("filters");
     const [extras] = useSetting("extras");
@@ -242,6 +243,7 @@ export default function App() {
             negative,
             characters,
             post,
+            omit,
             ...extras,
         });
 

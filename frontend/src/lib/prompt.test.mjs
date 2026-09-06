@@ -47,4 +47,22 @@ assert.equal(keyOf("(leaf (pokemon):1.3)"), "leaf_(pokemon)");
 assert.equal(keyOf("(Blue Eyes:1.3)"), "blue_eyes");
 assert.equal(keyOf("blue_eyes"), "blue_eyes");
 
+// Search may select a female post for its clothes without adding its count.
+const attire = { tags: ["1girl", "dress", "ribbon", "blue_eyes"], cats: [0, 0, 0, 0] };
+assert.equal(await buildPrompt({
+    beginning: "1boy", post: attire, omit: "1girl, Blue Eyes",
+}), "1boy, dress, ribbon");
+
+// Omit never deletes explicitly typed beginning/ending, including weights.
+assert.equal(await buildPrompt({
+    beginning: "{1girl}", ending: "blue eyes", post: attire,
+    omit: "1girl, blue_eyes",
+}), "{1girl}, dress, ribbon, blue eyes");
+
+// No substring filtering, no source mutation, and an empty omit is compatible.
+assert.equal(await buildPrompt({ post: attire, omit: "girl" }),
+    await buildPrompt({ post: attire }));
+assert.deepEqual(attire.tags, ["1girl", "dress", "ribbon", "blue_eyes"]);
+assert.equal(await buildPrompt({ beginning: "1girl", post: { tags: [], cats: [] }, omit: "1girl" }), "1girl");
+
 console.log("ok");
