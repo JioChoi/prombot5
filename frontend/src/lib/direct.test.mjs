@@ -130,3 +130,20 @@ test("an engine that cannot stream says so in the handshake", async () => {
         handler: "Stay",
     });
 });
+
+test("a late userscript reply updates subscribers without a reload", async () => {
+    listeners.clear();
+    const fresh = await import(`./direct.js?late=${Date.now()}`);
+    const states = [];
+    const unsubscribe = fresh.subscribeDirect(value => states.push(value));
+    assert.equal(await fresh.detectDirect(1), null);
+    window.postMessage({ tag: "prombot-nai", type: "ready", version: "1.3.1", stream: true });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(states.length, 2);
+    assert.equal(states[1].version, "1.3.1");
+    assert.equal((await fresh.detectDirect()).version, "1.3.1");
+    unsubscribe();
+    window.postMessage({ tag: "prombot-nai", type: "ready", version: "1.3.2", stream: true });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(states.length, 2, "unmounted subscribers must not be called");
+});

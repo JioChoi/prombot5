@@ -1,47 +1,10 @@
 import { decode } from "@msgpack/msgpack";
 import { NAI, detectDirect, directFetch, directReady, markNoStream } from "./direct.js";
 
-// Points at the backend (frontend/.env). Optional chaining because a plain-node
-// test importing this file has no import.meta.env.
-const API = import.meta.env?.VITE_API ?? "";
-
-/* A dead backend surfaces as "Load failed" (Safari) or "Failed to fetch" (Chrome),
-   which says nothing about what to go fix. Name the actual cause instead. */
-async function call(path, init) {
-    try {
-        return await fetch(`${API}${path}`, init);
-    } catch (e) {
-        // A header value the browser refuses — a key pasted with a newline in
-        // it, say — never reaches the network, and iOS Safari reports that as
-        // "The string did not match the expected pattern".
-        if (e.name === "SyntaxError" || e.name === "TypeError") {
-            if (/pattern|header|invalid/i.test(e.message)) {
-                throw new Error("That API key has characters the browser won't send — re-paste it");
-            }
-        }
-        // An abort is the caller's own doing, and callers tell it apart by name.
-        // Renaming it here would report a deliberate stop as a dead backend.
-        if (e.name === "AbortError") throw e;
-        throw new Error("Can't reach the server — is the backend running on :8090?");
-    }
-}
-
-/**
- * The same request, made the best way available.
- *
- * With the userscript installed it goes straight to NovelAI from the device, so
- * the account is the only one on its IP address. Without it, through the relay
- * as before — the site works either way, the difference is whose address
- * NovelAI sees.
- */
-const PROXIED = {
-    "/user/subscription": "/api/subscription",
-    "/ai/generate-image": "/api/generate-image",
-    "/ai/generate-image-stream": "/api/generate-image-stream",
-};
-
 async function nai(path, init = {}) {
-    if (!(await detectDirect())) return call(PROXIED[path], init);
+    if (!(await detectDirect())) {
+        throw new Error("Direct mode is required. Enable the Prombot Direct userscript; no relay request was sent.");
+    }
     return directFetch(`${NAI}${path}`, init);
 }
 
@@ -72,13 +35,7 @@ export async function verifyToken(token) {
         headers: { Authorization: `Bearer ${(token ?? "").trim()}` },
         cache: "no-store",
     };
-    let r = await nai("/user/subscription", init);
-
-    // A rejection is acted on — the caller discards the key over it — so the
-    // userscript does not get to be the only witness. Engines differ in what
-    // they pass through, and a key wrongly thrown away is a person locked out
-    // of their own generator until they go and find it again.
-    if (r.status === 401 && directReady()) r = await call("/api/subscription", init);
+    const r = await nai("/user/subscription", init);
 
     if (!r.ok) throw new Error(r.status === 401 ? REJECTED : `Check failed (${r.status})`);
     // Two separate pots — the subscription's monthly allowance and bought Anlas.

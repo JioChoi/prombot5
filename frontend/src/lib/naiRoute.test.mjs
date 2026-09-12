@@ -1,6 +1,5 @@
 /* node --test src/lib/naiRoute.test.mjs — which way a NovelAI call leaves:
-   straight out when the userscript is installed, through the relay when it is
-   not. Same fake window as direct.test.mjs. */
+   straight out when the userscript is installed, otherwise rejected. Same fake window as direct.test.mjs. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -30,10 +29,10 @@ globalThis.fetch = async (url, init) => {
 
 const { verifyToken, unzipFirst, frames, generate } = await import("./nai.js");
 
-test("with no script installed the relay is used", async () => {
-    assert.equal((await verifyToken(" pst-x\n")).anlas, 7);
-    assert.equal(asked.at(-1).url, "/api/subscription");
-    assert.equal(asked.at(-1).init.headers.Authorization, "Bearer pst-x");
+test("without Direct no credential or generation request reaches the relay", async () => {
+    await assert.rejects(verifyToken("pst-x"), /Direct mode is required/);
+    await assert.rejects(generate("pst-x", {}), /Direct mode is required/);
+    assert.equal(asked.length, 0);
 });
 
 let installed = null; // one pretend script at a time, like a real browser
@@ -82,7 +81,7 @@ test("a stored zip is unpacked without a library", async () => {
     assert.equal(new TextDecoder().decode(await unzipFirst(zip)), "hello");
 });
 
-test("a rejection from the script is confirmed with the relay first", async () => {
+test("a Direct rejection never sends the key to the relay", async () => {
     // the script says 401; the relay says the key is fine
     let checked = 0;
     globalThis.fetch = async (url) => {
@@ -103,8 +102,8 @@ test("a rejection from the script is confirmed with the relay first", async () =
         }
     });
 
-    assert.equal((await verifyToken("pst-x")).anlas, 5);
-    assert.equal(checked, 1, "the relay should have been asked to confirm");
+    await assert.rejects(verifyToken("pst-x"), /That key was rejected/);
+    assert.equal(checked, 0, "the relay must never receive the key");
 });
 
 test("a stream that ends without the final frame still yields the image", async () => {

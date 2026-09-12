@@ -11,6 +11,7 @@ import usePersistentState from "./hooks/usePersistentState.js";
 import useSubscription from "./hooks/useSubscription.js";
 import { keepAwake, releaseAwake } from "./lib/keepAwake.js";
 import { checkDirect, generate } from "./lib/nai.js";
+import { subscribeDirect } from "./lib/direct.js";
 import { buildRequest } from "./lib/naiRequest.js";
 import { buildPrompt, fillCharacters } from "./lib/prompt.js";
 import {
@@ -125,8 +126,7 @@ export default function App() {
     // drawer opens on the one you were working in, ready to overwrite.
     const [preset, setPreset] = usePersistentState("preset", "");
     const [token, setToken] = usePersistentState("naiToken", "");
-    /* Whether generations leave from this device or through the relay. Looked
-       for once: an extension cannot appear halfway through a page's life. */
+    // The userscript may become available after the app has mounted.
     const [direct, setDirect] = useState(null);
     const [setupOpen, setSetupOpen] = useState(false);
     // Epoch ms. The sheet is a warning about someone's account, so it comes back
@@ -159,17 +159,26 @@ export default function App() {
         autoRef.current = autoGen;
     }, [autoGen]);
 
+    useEffect(() => {
+        let active = true;
+        const unsubscribe = subscribeDirect((found) => {
+            setDirect(found);
+            if (found) setSetupOpen(false);
+        });
+        checkDirect().then((found) => {
+            if (active && !found && Date.now() > (snoozedAt.current ?? 0)) setSetupOpen(true);
+        });
+        return () => {
+            active = false;
+            unsubscribe();
+        };
+    }, []);
+
     // Generating must not wait on a download that could have happened while the
     // page was idle. Failures are ignored on purpose: each loader retries when
     // something actually needs it, and there is nothing to say here yet.
     useEffect(() => {
         onWarmProgress(setWarm);
-        checkDirect().then((found) => {
-            setDirect(found);
-            // Nothing to explain once it is installed, and nothing to nag about
-            // while a snooze is running.
-            if (!found && Date.now() > (snoozedAt.current ?? 0)) setSetupOpen(true);
-        });
         onDrawProgress(setDrawn);
         // Whether it worked or not the bar has nothing left to say.
         warmPromptIndex().then(

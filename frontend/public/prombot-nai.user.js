@@ -1,15 +1,16 @@
 // ==UserScript==
 // @name         Prombot Direct
 // @namespace    https://prombot.net/
-// @version      1.3.0
+// @version      1.3.3
 // @description  Sends Prombot's NovelAI requests straight from your device instead of through a shared proxy, so your account is the only one on your IP address.
 // @author       Prombot
 // @match        https://prombot.net/*
 // @match        https://www.prombot.net/*
-// @match        http://localhost:8092/*
+// @include      /^http:\/\/(localhost|127\.0\.0\.1):8092\//
 // @connect      image.novelai.net
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
+// @grant        unsafeWindow
 // @run-at       document-start
 // @noframes
 // ==/UserScript==
@@ -35,8 +36,10 @@
     "use strict";
 
     const TAG = "prombot-nai";
+    // MessageEvent.source is the page window, not Tampermonkey's sandbox wrapper.
+    const pageWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
     const ALLOWED = "https://image.novelai.net";
-    const VERSION = "1.3.0";
+    const VERSION = "1.3.3";
 
     // GM.xmlHttpRequest is the promise-flavoured name; Stay on iOS ships that
     // one, Tampermonkey ships both.
@@ -131,6 +134,7 @@
                 drain(res);
             };
             options.onload = (res) => {
+                head(res);
                 drain(res);
                 running.delete(id);
                 if (sent === 0) {
@@ -140,7 +144,6 @@
                     post({ type: "error", id, message: "no-stream" });
                     return;
                 }
-                head(res, true);
                 post({ type: "done", id });
             };
         } else {
@@ -178,7 +181,7 @@
     }
 
     window.addEventListener("message", (e) => {
-        if (e.source !== window || e.origin !== window.location.origin) return;
+        if (e.source !== pageWindow || e.origin !== window.location.origin) return;
         const msg = e.data;
         if (!msg || msg.tag !== TAG) return;
         if (msg.type === "hello") {
