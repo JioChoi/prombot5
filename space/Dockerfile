@@ -29,5 +29,9 @@ ADD $REPO_RAW/backend/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY entrypoint.sh /entrypoint.sh
-ENV INDEX_DIR=/index
+# chmod: the Hub does not carry the exec bit through an upload, and a CMD that
+# is not executable fails with nothing in the logs to say why.
+RUN chmod +x /entrypoint.sh
+# Unbuffered, or a crash in the first seconds takes its own traceback with it.
+ENV INDEX_DIR=/index PYTHONUNBUFFERED=1
 CMD ["/entrypoint.sh"]

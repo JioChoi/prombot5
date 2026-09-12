@@ -36,7 +36,7 @@ jobs:
         env:
           # Overrides the blank VITE_API in frontend/.env, which means
           # same-origin and is right for dev and for the single-service image.
-          VITE_API: https://jio777-proxy6.hf.space
+          VITE_API: https://jio777-proxy4.hf.space
       # Pages serves the apex domain only if the artifact carries this.
       - run: echo prombot.net > frontend/dist/CNAME
       - uses: actions/upload-pages-artifact@v3
