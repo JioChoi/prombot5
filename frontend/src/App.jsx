@@ -1,5 +1,5 @@
 import { Bookmark, History, Infinity as InfinityIcon, ShieldAlert, ShieldCheck } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import BottomSheet from "./components/BottomSheet.jsx";
 import CharactersTab from "./components/CharactersTab.jsx";
 import DirectSetup from "./components/DirectSetup.jsx";
@@ -155,6 +155,7 @@ export default function App() {
     // state directly would give it whatever `autoGen` was when it started.
     // Switching back to single has to reach a loop that is already going.
     const autoRef = useRef(autoGen);
+    const onceRef = useRef(null);
     useEffect(() => {
         autoRef.current = autoGen;
     }, [autoGen]);
@@ -290,6 +291,12 @@ export default function App() {
         if (autoDownload) download(src, name);
     }
 
+    // Each image keeps the settings from its starting render. The next image
+    // uses the latest committed render, including edits made during a draw.
+    useLayoutEffect(() => {
+        onceRef.current = once;
+    });
+
     /** Counts the pause down, and gives up the moment automation is switched off.
         Returns whether the loop should carry on. */
     async function pause() {
@@ -313,7 +320,7 @@ export default function App() {
         try {
             for (;;) {
                 try {
-                    await once();
+                    await onceRef.current();
                     setError("");
                 } catch (e) {
                     // Name the class too: a browser-side rejection arrives as a
