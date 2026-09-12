@@ -88,3 +88,19 @@ test("reformat spaces what it adds; switches off change nothing", async () => {
     const same = await fillCharacters(cast, { reorder: true, reformat: true });
     assert.equal(same[0], cast[0]);
 });
+
+test("attire filled in for a character keeps a tag that needs clothes", async () => {
+    const opened = { tags: ["outdoors", "open_clothes"], cats: [0, 0] };
+    const bare = await buildPrompt({ ...base, post: opened, beginning: "hakurei reimu" });
+    assert.ok(!bare.includes("open_clothes"), bare);
+
+    // her detached sleeves are attire, so by the time the requirement is
+    // checked there is something to open
+    const dressed = await buildPrompt({
+        ...base,
+        post: opened,
+        beginning: "hakurei reimu",
+        strengthenAttire: true,
+    });
+    assert.ok(dressed.includes("open_clothes"), dressed);
+});

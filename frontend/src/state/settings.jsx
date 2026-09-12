@@ -9,7 +9,7 @@ const SettingsContext = createContext(null);
 
 /* Tag types the generator may use. These are stored inverted — true means the
    type is switched *off* — so this lists the ones left out: everything except
-   attire and expressions. */
+   attire, expressions, background and objects. */
 const FILTERS_OFF = {
     character: true,
     artist: true,

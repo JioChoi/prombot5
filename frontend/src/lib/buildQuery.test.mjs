@@ -12,17 +12,22 @@ assert.deepEqual(q({}).dropCats, []);
 // the rest are subsets that live in tag-groups.
 assert.deepEqual(q({ character: true }).dropCats, [4]);
 assert.deepEqual(q({ artist: true }).dropCats, [1]);
+// an artist off takes their style tags with them
+assert.deepEqual(q({ artist: true }).drop, ["style"]);
 assert.deepEqual(q({ copyright: true }).dropCats, [3]);
 assert.deepEqual(q({ character: true }).drop, []);
 
 assert.deepEqual(q({ nsfw: true }).drop, ["nsfw"]);
+// the two new pills cut scene and object tags out of the draw
+assert.deepEqual(q({ scene: true }).drop, ["scene"]);
+assert.deepEqual(q({ object: true }).drop, ["object"]);
 assert.deepEqual(q({ characteristic: true }).drop, ["feature"]);
 assert.deepEqual(q({ nsfw: true }).dropCats, []);
 
 // Both kinds at once, each landing in its own list.
 const both = q({ artist: true, attire: true });
 assert.deepEqual(both.dropCats, [1]);
-assert.deepEqual(both.drop, ["attire"]);
+assert.deepEqual(both.drop, ["attire", "style"]);
 
 // A pill that is on (false) must not cut.
 assert.deepEqual(q({ artist: false, nsfw: false }).dropCats, []);

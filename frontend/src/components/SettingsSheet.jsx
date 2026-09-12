@@ -1,10 +1,12 @@
 import { ChevronDown, ChevronUp, Dices, Eye, EyeOff, Loader2, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { freeCell } from "../lib/position.js";
-import { buildQuery, promptCount } from "../lib/promptIndex.js";
+import { tracePrompt, traceCharacters } from "../lib/prompt.js";
+import { buildQuery, promptCount, randomPrompt } from "../lib/promptIndex.js";
 import { useSetting } from "../state/settings.jsx";
 import Dropdown from "./Dropdown.jsx";
 import PositionGrid from "./PositionGrid.jsx";
+import PromptPreview from "./PromptPreview.jsx";
 import {
     FieldRow,
     Group,
@@ -106,6 +108,8 @@ const FILTERS = [
     ["attire", "Attire"],
     ["characteristic", "Features"],
     ["expression", "Expressions"],
+    ["scene", "Background"],
+    ["object", "Objects"],
     ["nsfw", "NSFW"],
 ];
 
@@ -127,7 +131,11 @@ const TABS = [
     ["automation", "Automation"],
 ];
 
-export default function SettingsSheet() {
+/* `token` is a prop, not a stored value read again here: two components using
+   usePersistentState on one key do not share it, and each writes its own copy
+   back on mount — a second reader of "naiToken" mounted before login wipes the
+   key that was there. App owns it; this only borrows it to sign a draw. */
+export default function SettingsSheet({ token = "" }) {
     const [tab, setTab] = useState("prompt");
 
     const [beginning, setBeginning] = useSetting("beginning");
@@ -183,7 +191,7 @@ export default function SettingsSheet() {
         // to read, sampled when they are not. Asking for both and racing them
         // left a band of queries where neither replied and the previous number
         // stayed on screen.
-        promptCount(query)
+        promptCount(query, token)
             .then(
                 ({ n, exact }) =>
                     setMatches(
@@ -194,6 +202,32 @@ export default function SettingsSheet() {
                 () => setMatches("Prompt index unavailable"),
             )
             .finally(() => setCounting(false));
+    }
+
+    // One dry run of the generator: the same draw and the same assembly the
+    // Generate button does, shown instead of sent.
+    const [preview, setPreview] = useState(null); // { open, trace, error }
+
+    async function showPrompt() {
+        setPreview({ open: true, trace: null, error: "" });
+        try {
+            const query = randomize
+                ? buildQuery({ include, exclude, minScore, filters })
+                : null;
+            const post = query ? await randomPrompt(query, token) : { tags: [], cats: [] };
+            if (!post) {
+                setPreview({ open: true, trace: null, error: "No post matches these settings." });
+                return;
+            }
+            const opts = { beginning, ending, negative, characters, ...extras };
+            const [{ parts }, cast] = await Promise.all([
+                tracePrompt({ ...opts, post, omit }),
+                traceCharacters(characters, opts),
+            ]);
+            setPreview({ open: true, trace: { parts, cast }, error: "" });
+        } catch (e) {
+            setPreview({ open: true, trace: null, error: e.message || "Draw failed." });
+        }
     }
 
     // Order is meaningful — NovelAI reads the cast in the order it is sent — so
@@ -589,6 +623,21 @@ export default function SettingsSheet() {
                                 ))}
                             </Rows>
                         </Group>
+
+                        <div className="-mt-2 flex items-center gap-2 px-0.5">
+                            <button
+                                type="button"
+                                onClick={showPrompt}
+                                className="flex shrink-0 items-center gap-1.5 rounded-full border border-hair
+                                           bg-panel px-3 py-1 text-[11.5px] text-mut transition-colors
+                                           active:text-fg"
+                            >
+                                Show generated prompt
+                            </button>
+                            <span className="min-w-0 flex-1 text-[11.5px] leading-snug text-dim">
+                                One sample draw, marked up by what added each tag.
+                            </span>
+                        </div>
                     </>
                 ) : null}
 
@@ -771,6 +820,13 @@ export default function SettingsSheet() {
                     </>
                 ) : null}
             </div>
+
+            <PromptPreview
+                open={!!preview?.open}
+                trace={preview?.trace}
+                error={preview?.error}
+                onClose={() => setPreview(null)}
+            />
         </>
     );
 }

@@ -1,14 +1,15 @@
-import { Bookmark, History, Infinity as InfinityIcon } from "lucide-react";
+import { Bookmark, History, Infinity as InfinityIcon, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import BottomSheet from "./components/BottomSheet.jsx";
 import CharactersTab from "./components/CharactersTab.jsx";
+import DirectSetup from "./components/DirectSetup.jsx";
 import HistoryDrawer from "./components/HistoryDrawer.jsx";
 import LoginSheet from "./components/LoginSheet.jsx";
 import PresetsDrawer from "./components/PresetsDrawer.jsx";
 import SettingsSheet from "./components/SettingsSheet.jsx";
 import usePersistentState from "./hooks/usePersistentState.js";
 import { keepAwake, releaseAwake } from "./lib/keepAwake.js";
-import { REJECTED, generate, verifyToken } from "./lib/nai.js";
+import { REJECTED, checkDirect, generate, verifyToken } from "./lib/nai.js";
 import { buildRequest } from "./lib/naiRequest.js";
 import { buildPrompt, fillCharacters } from "./lib/prompt.js";
 import {
@@ -123,6 +124,16 @@ export default function App() {
     // drawer opens on the one you were working in, ready to overwrite.
     const [preset, setPreset] = usePersistentState("preset", "");
     const [token, setToken] = usePersistentState("naiToken", "");
+    /* Whether generations leave from this device or through the relay. Looked
+       for once: an extension cannot appear halfway through a page's life. */
+    const [direct, setDirect] = useState(null);
+    const [setupOpen, setSetupOpen] = useState(false);
+    // Epoch ms. The sheet is a warning about someone's account, so it comes back
+    // on its own — snoozing is a week, not for ever.
+    const [snoozed, setSnoozed] = usePersistentState("directSnoozedUntil", 0);
+    // Read once, in the load effect below: a snooze set during this session
+    // must not make the sheet appear or vanish under the person setting it.
+    const snoozedAt = useRef(snoozed);
     const [anlas, setAnlas] = useState(null);
     // The in-flight generation: its latest progress image, and how long is left
     // of the pause before the next one.
@@ -152,6 +163,12 @@ export default function App() {
     // something actually needs it, and there is nothing to say here yet.
     useEffect(() => {
         onWarmProgress(setWarm);
+        checkDirect().then((found) => {
+            setDirect(found);
+            // Nothing to explain once it is installed, and nothing to nag about
+            // while a snooze is running.
+            if (!found && Date.now() > (snoozedAt.current ?? 0)) setSetupOpen(true);
+        });
         onDrawProgress(setDrawn);
         // Whether it worked or not the bar has nothing left to say.
         warmPromptIndex().then(
@@ -204,28 +221,11 @@ export default function App() {
 
     const active = shots.find((h) => h.id === activeId) ?? shots[0];
 
-    /* The draw for the *next* image, started while the current one is still
-       being painted. A draw is several round trips and an image is fifteen
-       seconds, so overlapping them hides the wait completely in a loop, and
-       makes the second press of Generate instant. Keyed by the query it was
-       drawn for: change a filter and the held post is no longer an answer to
-       the question being asked. */
-    const ahead = useRef(null);
-
-    function nextPost(query) {
-        const key = JSON.stringify(query);
-        const held = ahead.current;
-        ahead.current = null;
-        // Failures are not cached — a dropped prefetch should cost a retry,
-        // not the whole run.
-        return held?.key === key ? held.post.then((p) => p ?? randomPrompt(query)) : randomPrompt(query);
-    }
-
-    function prefetch(query) {
-        const key = JSON.stringify(query);
-        if (ahead.current?.key === key) return;
-        ahead.current = { key, post: randomPrompt(query).catch(() => null) };
-    }
+    /* No prefetching any more. It existed because a draw was dozens of ranged
+       reads against a 1.1 GB index and took seconds, so the next one was
+       started behind the current image. The server draws now — tens of
+       milliseconds — and the second request inside the rate limiter's window
+       was spending the allowance for the draw that actually gets used. */
 
     /** One image, start to finish. Throws so the loop below can stop on failure. */
     async function once() {
@@ -234,10 +234,8 @@ export default function App() {
         const query = randomize ? buildQuery({ include, exclude, minScore, filters }) : null;
         let post;
         try {
-            // Only a draw someone is waiting on gets the bar; a prefetch runs
-            // behind an image nobody is watching a progress bar for.
             setOnDraw(true);
-            post = query ? await nextPost(query) : { tags: [], cats: [] };
+            post = query ? await randomPrompt(query, token) : { tags: [], cats: [] };
         } finally {
             setOnDraw(false);
         }
@@ -271,9 +269,6 @@ export default function App() {
                 varietyPlus,
             },
         });
-
-        // The request is away; the next draw rides along beside it.
-        if (query) prefetch(query);
 
         const blob = await generate(token, body, {
             // Each progress image replaces the last, and the one it replaces is
@@ -333,7 +328,11 @@ export default function App() {
                     await once();
                     setError("");
                 } catch (e) {
-                    setError(e.message);
+                    // Name the class too: a browser-side rejection arrives as a
+                    // bare DOM message ("The string did not match the expected
+                    // pattern" on iOS Safari) that says nothing about which step
+                    // threw it.
+                    setError(e.name && e.name !== "Error" ? `${e.name}: ${e.message}` : e.message);
                     // An empty pool needs new filters; retrying cannot recover
                     // and otherwise leaves Generate disabled indefinitely.
                     if (e instanceof NoMatchingPromptError) {
@@ -387,21 +386,58 @@ export default function App() {
 
             <TabBar tab={tab} onTab={setTab} />
 
-            {/* Anlas balance. Hidden until logged in, since there is no number to
-                show and the corner is better left empty than filled with a dash. */}
-            {anlas === null ? null : (
-                <div
-                    className="fixed right-3 z-30 flex items-center gap-1.5 rounded-full border border-hair
-                               bg-[#33333a]/60 px-2.5 py-1 backdrop-blur-2xl
-                               shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14)]"
-                    style={{ top: "calc(0.75rem + env(safe-area-inset-top))", color: ANLAS }}
-                >
-                    <AnlasIcon />
-                    <span className="num text-[12.5px] font-medium tabular-nums">
-                        {anlas.toLocaleString()}
-                    </span>
-                </div>
-            )}
+            {/* Top right, stacked: the Anlas balance keeps the corner it has
+                always had, and how requests are leaving hangs under it. Side by
+                side they reach the centred tab bar on a phone. */}
+            <div
+                className="fixed right-3 z-50 flex flex-col items-end gap-1.5"
+                style={{ top: "calc(0.75rem + env(safe-area-inset-top))" }}
+            >
+                {anlas === null ? null : (
+                    <div
+                        className="flex items-center gap-1.5 rounded-full border border-hair
+                                   bg-[#33333a]/60 px-2.5 py-1 backdrop-blur-2xl
+                                   shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14)]"
+                        style={{ color: ANLAS }}
+                    >
+                        <AnlasIcon />
+                        <span className="num text-[12.5px] font-medium tabular-nums">
+                            {anlas.toLocaleString()}
+                        </span>
+                    </div>
+                )}
+                {/* Lit when the userscript is answering: generations go straight
+                    to NovelAI. Dim when they still go through the relay, and
+                    tapping it says what that means and how to change it. */}
+                {direct === null ? null : (
+                    <button
+                        type="button"
+                        onClick={() => setSetupOpen(true)}
+                        aria-label={direct ? "Direct mode on" : "Using relay servers — set up direct mode"}
+                        className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]
+                                    font-medium backdrop-blur-2xl transition-colors
+                                    shadow-[inset_0_1px_0_0_rgb(255_255_255/0.14)] ${
+                                        direct
+                                            ? "border-emerald-300/35 bg-emerald-400/15 text-emerald-200"
+                                            : "border-hair bg-[#33333a]/60 text-dim active:text-fg"
+                                    }`}
+                    >
+                        {direct ? (
+                            <ShieldCheck strokeWidth={2} className="h-[14px] w-[14px]" />
+                        ) : (
+                            <ShieldAlert strokeWidth={2} className="h-[14px] w-[14px]" />
+                        )}
+                        {direct ? "Direct" : "Relay"}
+                    </button>
+                )}
+            </div>
+
+            <DirectSetup
+                open={setupOpen}
+                installed={!!direct}
+                onClose={() => setSetupOpen(false)}
+                onSnooze={(days) => setSnoozed(Date.now() + days * 86400000)}
+            />
 
             {/* Hidden, not unmounted: a loop started here keeps running while the
                 character list is open, and comes back exactly as it was. */}
@@ -563,7 +599,7 @@ export default function App() {
                 and the sheet's grabber go away with the rest of it and the
                 character grid gets the whole width. */}
             <BottomSheet open={sheetOpen} onOpenChange={setSheetOpen}>
-                <SettingsSheet />
+                <SettingsSheet token={token} />
             </BottomSheet>
             </div>
 

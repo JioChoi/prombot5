@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import presets
+import prompts
 import relay
 
 # run.sh already exports .env, but uvicorn started by hand does not — and the
@@ -46,6 +47,7 @@ app.add_middleware(
 )
 
 app.include_router(presets.router)
+app.include_router(prompts.router)
 
 
 @app.get("/health")
@@ -118,6 +120,12 @@ if STATIC:
     async def site(path: str):
         """A real file if there is one, the app otherwise — a single page has no
         server-side routes, so a deep link is still just index.html."""
+        # Except under /api: an endpoint this build does not have must say so.
+        # Answering index.html with a 200 hands the browser HTML where it
+        # expects JSON, which surfaces as a parse error naming neither the path
+        # nor the fact that the server is out of date.
+        if path.startswith("api/"):
+            return JSONResponse({"detail": f"No such endpoint: /{path}"}, status_code=404)
         # realpath before the check: "../../etc/passwd" is a path the client
         # controls, and joining it blindly would serve anything on the disk.
         wanted = os.path.realpath(os.path.join(ROOT, path))

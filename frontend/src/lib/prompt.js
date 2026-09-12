@@ -7,7 +7,8 @@
    the same weights the user asked for, just no longer sharing brackets, since a
    reordered prompt can't keep a group contiguous. */
 
-import { ARTIST, categoryOf, profileOf } from "./promptIndex.js";
+import { ARTIST, categoryOf, profileOf, wardrobe } from "./promptIndex.js";
+import { unmetRequirement } from "./requiring.js";
 
 const COPYRIGHT = 3;
 const CHARACTER = 4;
@@ -171,10 +172,12 @@ async function fillIn(entries, opts) {
     const present = new Set(entries.map((e) => keyOf(e.tag)));
     const added = [];
 
-    const push = (tag, cat) => {
+    // `origin`/`from` are what the preview reads back: which switch put this
+    // tag in, and which character it came with.
+    const push = (tag, cat, origin, from) => {
         if (present.has(tag) || opts.banned.has(tag)) return;
         present.add(tag);
-        added.push({ tag, weight: 0, cat });
+        added.push({ tag, weight: 0, cat, origin, from });
     };
 
     for (const e of entries) {
@@ -183,11 +186,12 @@ async function fillIn(entries, opts) {
         if (e.cat !== CHARACTER) continue;
         const profile = await profileOf(keyOf(e.tag)).catch(() => undefined);
         if (!profile) continue;
-        if (opts.autoCopyright && profile.series) push(profile.series, COPYRIGHT);
+        const who = keyOf(e.tag);
+        if (opts.autoCopyright && profile.series) push(profile.series, COPYRIGHT, "series", who);
         // The profile is already capped at five per group by the build, and
         // ordered most-characteristic first.
-        if (opts.strengthenCharacteristic) for (const t of profile.features) push(t, 0);
-        if (opts.strengthenAttire) for (const t of profile.attire) push(t, 0);
+        if (opts.strengthenCharacteristic) for (const t of profile.features) push(t, 0, "feature", who);
+        if (opts.strengthenAttire) for (const t of profile.attire) push(t, 0, "attire", who);
     }
     return added;
 }
@@ -205,7 +209,7 @@ async function fillIn(entries, opts) {
  * tags when anyone asked for `uncensored`. Filling *them* in is a separate
  * job, since they leave the app as their own fields: see fillCharacters.
  */
-export async function buildPrompt({
+async function compose({
     beginning = "",
     ending = "",
     negative = "",
@@ -219,8 +223,8 @@ export async function buildPrompt({
     strengthenCharacteristic,
     strengthenAttire,
 }) {
-    const head = parsePrompt(beginning);
-    const tail = parsePrompt(ending);
+    const head = parsePrompt(beginning).map((e) => ({ ...e, origin: "typed" }));
+    const tail = parsePrompt(ending).map((e) => ({ ...e, origin: "typed" }));
     const pinned = new Set([...head, ...tail].map((e) => keyOf(e.tag)));
 
     const banned = bans({ negative, beginning, ending, characters });
@@ -245,6 +249,7 @@ export async function buildPrompt({
                 !banned.has(keyOf(e.tag)),
         );
 
+    for (const e of drawn) e.origin = "drawn";
     let entries = [...head, ...drawn, ...tail];
 
     if (autoCopyright || strengthenCharacteristic || strengthenAttire) {
@@ -257,6 +262,24 @@ export async function buildPrompt({
             }),
         );
     }
+
+    // A drawn `skirt_lift` outlives the skirt when the attire pill or the omit
+    // list took it out, so the requirement is checked against what the prompt
+    // finally says — after the fill-ins, since "Add character attire" can be
+    // the very thing that puts the skirt back on. Only drawn tags are cut:
+    // typed text is the user's, and a fill-in was asked for. A failed fetch
+    // leaves every tag in place.
+    const wearing = new Set(
+        entries.map((e) => keyOf(e.tag)).concat(
+            characters.flatMap((c) => parsePrompt(c.text ?? "").map((e) => keyOf(e.tag))),
+        ),
+    );
+    const { requires, groups } = await wardrobe().catch(() => ({
+        requires: new Map(),
+        groups: new Map(),
+    }));
+    const unmet = unmetRequirement(wearing, requires, groups);
+    entries = entries.filter((e) => e.origin !== "drawn" || !unmet(keyOf(e.tag)));
 
     if (reorder) {
         // one block fetch per typed tag, and the drawn ones are already cached
@@ -272,18 +295,31 @@ export async function buildPrompt({
             .map((r) => r[2]);
     }
 
-    return renderPrompt(
-        entries.map((e) => {
-            let tag = e.tag;
-            if (reformat) {
-                if (e.cat === ARTIST && !tag.startsWith("artist:")) tag = `artist:${tag}`;
-                tag = tag.startsWith("artist:")
-                    ? `artist:${spaced(tag.slice(7))}`
-                    : spaced(tag);
-            }
-            return { tag, weight: e.weight };
-        }),
-    );
+    return entries.map((e) => {
+        let tag = e.tag;
+        if (reformat) {
+            if (e.cat === ARTIST && !tag.startsWith("artist:")) tag = `artist:${tag}`;
+            tag = tag.startsWith("artist:")
+                ? `artist:${spaced(tag.slice(7))}`
+                : spaced(tag);
+        }
+        return { tag, weight: e.weight, origin: e.origin ?? "typed", from: e.from };
+    });
+}
+
+/** The prompt as text — what leaves the app. */
+export async function buildPrompt(opts) {
+    return renderPrompt(await compose(opts));
+}
+
+/**
+ * The same prompt, still in pieces: each entry says whether it was typed,
+ * drawn, or filled in, and which character it arrived with. The preview reads
+ * this rather than the string, so nothing has to be parsed back out.
+ */
+export async function tracePrompt(opts) {
+    const parts = await compose(opts);
+    return { text: renderPrompt(parts), parts };
 }
 
 /**
@@ -300,18 +336,36 @@ export async function buildPrompt({
  * so positions and ids ride through untouched.
  */
 export async function fillCharacters(characters, opts) {
+    return (await traceCharacters(characters, opts)).map((t) => t.character);
+}
+
+/**
+ * The cast as above, each with the tags that were added to it and why — the
+ * caption half of what the preview shows.
+ */
+export async function traceCharacters(characters, opts) {
+    // `parts` is the caption in the same shape the base prompt comes back in:
+    // what was typed, then whatever was appended to it.
+    const typed = (c) => parsePrompt(c.text ?? "").map((e) => ({ ...e, origin: "typed" }));
+    const plain = characters.map((c) => ({ character: c, added: [], parts: typed(c) }));
     if (!opts.autoCopyright && !opts.strengthenCharacteristic && !opts.strengthenAttire) {
-        return characters;
+        return plain;
     }
     const banned = bans({ ...opts, characters });
     return Promise.all(
-        characters.map(async (c) => {
+        characters.map(async (c, i) => {
             const text = c.text ?? "";
             const added = await fillIn(parsePrompt(text), { ...opts, banned });
-            if (!added.length) return c;
+            if (!added.length) return plain[i];
             const tags = added.map((e) => (opts.reformat ? spaced(e.tag) : e.tag));
             const head = text.trim().replace(/,+$/, "").trim();
-            return { ...c, text: head ? `${head}, ${tags.join(", ")}` : tags.join(", ") };
+            const filled = head ? `${head}, ${tags.join(", ")}` : tags.join(", ");
+            const marked = added.map((e, j) => ({ ...e, tag: tags[j] }));
+            return {
+                character: { ...c, text: filled },
+                added: marked,
+                parts: [...typed(c), ...marked],
+            };
         }),
     );
 }
