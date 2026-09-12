@@ -29,3 +29,8 @@ frontend/public/*
 character_dict/**/*.webp
 .vercel
 .env*
+
+# Scratch: one-off classification scripts and their dumps. Untracked on purpose
+# — a Gemini key was once hardcoded in classify.py and rode a commit into the
+# history here, which is what GitHub's push protection caught.
+working/
