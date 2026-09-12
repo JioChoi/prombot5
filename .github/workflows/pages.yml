@@ -1,0 +1,54 @@
+# The site half: built here, served from GitHub Pages at prombot.net. The API
+# is not here — it answers from the Hugging Face Space, which is what VITE_API
+# below points the browser at, and why that Space needs ALLOWED_ORIGINS set.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A queued run is a newer commit; let the in-flight one finish rather than
+# publishing an older build over it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+        env:
+          # Overrides the blank VITE_API in frontend/.env, which means
+          # same-origin and is right for dev and for the single-service image.
+          VITE_API: https://jio777-proxy6.hf.space
+      # Pages serves the apex domain only if the artifact carries this.
+      - run: echo prombot.net > frontend/dist/CNAME
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

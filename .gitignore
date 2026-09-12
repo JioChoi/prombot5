@@ -18,6 +18,11 @@ frontend/public/*
 # from the data host.
 !frontend/public/characters.csv.gz
 
+# Same reason: the browser fetches these two from its own origin, so they have
+# to ship with the site rather than from the data host. 4 KB and 8 KB.
+!frontend/public/tag-requires.csv.gz
+!frontend/public/prombot-nai.user.js
+
 # The reference pictures pick_picture.py chose: ~28k webp, ~20 KB each. They
 # are deployed to the data host beside the index, not carried in the repo.
 character_dict/**/*.webp
