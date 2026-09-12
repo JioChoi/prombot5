@@ -1,10 +1,7 @@
 /* Talking to the Prombot Direct userscript.
 
-   Without it the browser's own rules apply: novelai.net sends no CORS headers,
-   so the page cannot call it and generation goes through a relay — which means
-   NovelAI sees the relay's address, shared with everyone else using it. With
-   the script installed the request is made by the extension instead, from the
-   device, and the relay is out of the picture.
+   The userscript sends NovelAI requests from this device. Callers must reject
+   requests when it is unavailable instead of routing them through a relay.
 
    The two halves talk over window.postMessage. This side hands out something
    Response-shaped so nai.js can treat both routes the same. */
@@ -14,6 +11,7 @@ export const NAI = "https://image.novelai.net";
 
 let ready = null; // { version, stream } once the script has answered
 let waiting = null; // the handshake, in flight
+const observers = new Set();
 const calls = new Map(); // request id -> handlers
 let nextId = 1;
 
@@ -29,6 +27,7 @@ function listen() {
             // for the finished image instead.
             ready = { version: msg.version, stream: msg.stream !== false, handler: msg.handler };
             waiting?.resolve(ready);
+            for (const notify of observers) notify(ready);
             return;
         }
         calls.get(msg.id)?.(msg);
@@ -40,13 +39,7 @@ function post(msg) {
     window.postMessage({ ...msg, tag: TAG }, window.location.origin);
 }
 
-/**
- * The installed script's details, or null. Cached once it has answered: an
- * extension cannot be installed halfway through a page's life without a reload.
- *
- * The wait is short on purpose — the script announces itself at document-start,
- * so anything slower than this is not installed.
- */
+/** Ask the script for its current connection; late replies still notify observers. */
 export function detectDirect(timeout = 400) {
     if (typeof window === "undefined") return Promise.resolve(null);
     if (ready) return Promise.resolve(ready);
@@ -61,6 +54,13 @@ export function detectDirect(timeout = 400) {
         waiting = null;
         return v ?? null;
     });
+}
+
+/** Keep the UI in sync when the userscript starts after the initial handshake. */
+export function subscribeDirect(notify) {
+    observers.add(notify);
+    notify(ready);
+    return () => observers.delete(notify);
 }
 
 /** Whether the script answered earlier in this page's life. */
@@ -107,6 +107,7 @@ export function directFetch(url, { method = "GET", headers = {}, body, signal, s
             if (msg.type === "head") {
                 head = msg;
                 if (!stream) return; // the body arrives whole, at "done"
+                if (opened) return;
                 opened = true;
                 resolve(
                     response(

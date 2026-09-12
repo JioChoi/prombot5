@@ -121,17 +121,14 @@ export default function DirectSetup({ open, installed, onClose, onSnooze }) {
                             Protect your NovelAI account
                         </h2>
                         <p className="mt-1.5 text-[13px] leading-relaxed text-mut">
-                            NovelAI has started banning accounts that share an IP address with
-                            others. Right now Prombot sends your generations through its own relay
-                            servers, so NovelAI sees the relay's address — the same address as
-                            everyone else using Prombot. That is a risk to your account, and it is
-                            not one you can do anything about from this side.
+                            Direct mode is required for NovelAI requests. Until the browser script
+                            connects, generation and account checks are blocked instead of being
+                            sent through a shared relay.
                         </p>
                         <p className="mt-2 text-[13px] leading-relaxed text-mut">
-                            A small browser script fixes it completely. With it installed, your
-                            device talks to NovelAI directly: no relay, no shared address, nothing
-                            in between. Your API key never goes anywhere it was not already going,
-                            and Prombot never sees it.
+                            Install or update Prombot Direct below. It sends requests from this
+                            device to NovelAI. When the script connects, this notice closes
+                            automatically and the Direct badge appears.
                         </p>
                     </div>
                 </div>
