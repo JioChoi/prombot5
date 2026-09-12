@@ -31,7 +31,7 @@ globalThis.fetch = async (url, init) => {
 const { verifyToken, unzipFirst, frames, generate } = await import("./nai.js");
 
 test("with no script installed the relay is used", async () => {
-    assert.equal(await verifyToken(" pst-x\n"), 7);
+    assert.equal((await verifyToken(" pst-x\n")).anlas, 7);
     assert.equal(asked.at(-1).url, "/api/subscription");
     assert.equal(asked.at(-1).init.headers.Authorization, "Bearer pst-x");
 });
@@ -63,7 +63,7 @@ test("with the script installed the call goes straight to NovelAI", async () => 
     });
 
     const before = asked.length;
-    assert.equal(await verifyToken("pst-x"), 12);
+    assert.equal((await verifyToken("pst-x")).anlas, 12);
     assert.equal(asked.length, before, "nothing should have gone to the relay");
 });
 
@@ -103,7 +103,7 @@ test("a rejection from the script is confirmed with the relay first", async () =
         }
     });
 
-    assert.equal(await verifyToken("pst-x"), 5);
+    assert.equal((await verifyToken("pst-x")).anlas, 5);
     assert.equal(checked, 1, "the relay should have been asked to confirm");
 });
 
